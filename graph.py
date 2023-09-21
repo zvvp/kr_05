@@ -16,8 +16,8 @@ fch1 = np.fromfile("fch1.bin", dtype=np.float32)
 fch2 = np.fromfile("fch2.bin", dtype=np.float32)
 fch3 = np.fromfile("fch3.bin", dtype=np.float32)
 
-p.plot(ch1[200:100000], pen='g')
-p.plot(fch1[200:100000], pen='y')
+p.plot(ch1[:500000], pen='g')
+p.plot(fch1[:500000]-3, pen='y')
 
 
 sys.exit(app.exec())
