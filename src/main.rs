@@ -54,21 +54,34 @@ fn cut_impuls(ch: &Vec<f32>) -> Vec<f32> {
     let mut win = [0.0; 11];
     let lench = ch.len();
 
-    for i in (3..lench - 3).step_by(1) {
+    for i in (3..lench - 5).step_by(1) {
         let j = i % 11;
         win[j] = ch[i];
-
-        if (out[i] - out[i - 1]).abs() > 2.0 {
-            // 0.3
+        let d1 = (ch[i - 1] - ch[i - 2]);
+        let d2 = (ch[i] - ch[i - 1]);
+        let d3 = (ch[i + 1] - ch[i]);
+        let d4 = (ch[i + 2] - ch[i + 1]);
+        let sum_d = d1.abs() + d2.abs() + d3.abs() + d4.abs();
+        if (ch[i] - out[i - 1]).abs() > 1.9 {
             let mut sort_win = win.to_vec();
             sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            out[i - 3] = sort_win[5];
             out[i - 2] = sort_win[5];
             out[i - 1] = sort_win[5];
             out[i] = sort_win[5];
             out[i + 1] = sort_win[5];
             out[i + 2] = sort_win[5];
             out[i + 3] = sort_win[5];
+            out[i + 4] = sort_win[5];
+            out[i + 5] = sort_win[5];
+        }
+        if (d1.signum() != d2.signum()) && (d2.signum() != d3.signum()) && ((d1.abs() + d2.abs() + d3.abs()) > 0.5) {
+            let mut sort_win = win.to_vec();
+            sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            out[i - 2] = sort_win[5];
+            out[i - 1] = sort_win[5];
+            out[i] = sort_win[5];
+            out[i + 1] = sort_win[5];
+            out[i + 2] = sort_win[5];
         }
     }
     out
@@ -130,6 +143,7 @@ fn clean_ch(b_peak24: &Vec<f32>, a_peak24: &Vec<f32>,
         }
     }
     fch
+    // ch_del_ks
 }
 
 fn main() {
