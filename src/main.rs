@@ -2,6 +2,8 @@ use bytemuck;
 use std::fs::File;
 use std::io::Read;
 use std::io::Write;
+// use ndarray::{Array1, ArrayView1, ArrayViewMut1};
+// use ndarray::s;
 
 
 fn read_ecg() -> (Vec<f32>, Vec<f32>, Vec<f32>) {
@@ -57,10 +59,10 @@ fn cut_impuls(ch: &Vec<f32>) -> Vec<f32> {
     for i in (3..lench - 5).step_by(1) {
         let j = i % 11;
         win[j] = ch[i];
-        let d1 = (ch[i - 1] - ch[i - 2]);
-        let d2 = (ch[i] - ch[i - 1]);
-        let d3 = (ch[i + 1] - ch[i]);
-        let d4 = (ch[i + 2] - ch[i + 1]);
+        let d1 = ch[i - 1] - ch[i - 2];
+        let d2 = ch[i] - ch[i - 1];
+        let d3 = ch[i + 1] - ch[i];
+        let d4 = ch[i + 2] - ch[i + 1];
         let sum_d = d1.abs() + d2.abs() + d3.abs() + d4.abs();
         if (ch[i] - out[i - 1]).abs() > 1.9 {
             let mut sort_win = win.to_vec();
@@ -146,6 +148,23 @@ fn clean_ch(b_peak24: &Vec<f32>, a_peak24: &Vec<f32>,
     // ch_del_ks
 }
 
+fn get_p2p(ch: &Vec<f32>) -> Vec<f32> {
+    let len_ch = ch.len();
+    let mut p2p = vec![0.0; len_ch];
+    for i in (0..len_ch - 40).step_by(5) {
+        let win_ch = &ch[i..i + 40];
+        let win_max = win_ch.iter().fold(std::f32::NEG_INFINITY, |max, &x| x.max(max));
+        let win_min = win_ch.iter().fold(std::f32::INFINITY, |min, &x| x.min(min));
+        let p2pw = win_max - win_min;
+        p2p[i+18] = p2pw;
+        p2p[i+19] = p2pw;
+        p2p[i+20] = p2pw;
+        p2p[i+21] = p2pw;
+        p2p[i+22] = p2pw;
+    }
+    p2p
+}
+
 fn main() {
     // bhn, ahn = butter(2, 6, 'hp', fs=250)
     let bhn = vec![0.89884553, -1.79769105, 0.89884553];
@@ -217,16 +236,20 @@ fn main() {
         .write_all(bytemuck::cast_slice(slice3))
         .expect("Не удалось записать в файл");
 
-    let bln = vec![0.00034054, 0.00204323, 0.00510806, 0.00681075, 0.00510806, 0.00204323, 0.00034054];
-    let aln = vec![1.0, -3.5794348, 5.65866717, -4.96541523, 2.52949491, -0.70527411, 0.08375648];
-
+    // let bln = vec![0.00034054, 0.00204323, 0.00510806, 0.00681075, 0.00510806, 0.00204323, 0.00034054];
+    // let aln = vec![1.0, -3.5794348, 5.65866717, -4.96541523, 2.52949491, -0.70527411, 0.08375648];
     // let fch1 = my_filtfilt(&bln, &aln, &mut ch1);
-    let fch1 = clean_ch(&b_peak24, &a_peak24, &bl24, &al24, &bh24, &ah24,
+
+    let cln_ch1 = clean_ch(&b_peak24, &a_peak24, &bl24, &al24, &bh24, &ah24,
                         &b_peak50, &a_peak50, &bl50, &al50, &b, &a, &ch1);
-    let fch2 = clean_ch(&b_peak24, &a_peak24, &bl24, &al24, &bh24, &ah24,
+    let cln_ch2 = clean_ch(&b_peak24, &a_peak24, &bl24, &al24, &bh24, &ah24,
                         &b_peak50, &a_peak50, &bl50, &al50, &b, &a, &ch2);
-    let fch3 = clean_ch(&b_peak24, &a_peak24, &bl24, &al24, &bh24, &ah24,
+    let cln_ch3 = clean_ch(&b_peak24, &a_peak24, &bl24, &al24, &bh24, &ah24,
                         &b_peak50, &a_peak50, &bl50, &al50, &b, &a, &ch3);
+
+    let fch1 = get_p2p(&cln_ch1);
+    let fch2 = get_p2p(&cln_ch2);
+    let fch3 = get_p2p(&cln_ch3);
 
     let slicef1: &[f32] = &fch1;
     let slicef2: &[f32] = &fch2;
