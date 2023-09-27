@@ -64,7 +64,7 @@ fn cut_impuls(ch: &Vec<f32>) -> Vec<f32> {
         let d3 = ch[i + 1] - ch[i];
         let d4 = ch[i + 2] - ch[i + 1];
         let sum_d = d1.abs() + d2.abs() + d3.abs() + d4.abs();
-        if (ch[i] - out[i - 1]).abs() > 1.9 {
+        if (ch[i] - out[i - 1]).abs() > 1.95 {
             let mut sort_win = win.to_vec();
             sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
             out[i - 2] = sort_win[5];
@@ -76,7 +76,7 @@ fn cut_impuls(ch: &Vec<f32>) -> Vec<f32> {
             out[i + 4] = sort_win[5];
             out[i + 5] = sort_win[5];
         }
-        if (d1.signum() != d2.signum()) && (d2.signum() != d3.signum()) && ((d1.abs() + d2.abs() + d3.abs()) > 0.5) {
+        if (d1.signum() != d2.signum()) && (d2.signum() != d3.signum()) && ((d1.abs() + d2.abs() + d3.abs()) > 0.7) {
             let mut sort_win = win.to_vec();
             sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
             out[i - 2] = sort_win[5];
@@ -175,8 +175,8 @@ fn get_p2p(ch: &Vec<f32>) -> Vec<f32> {
     let mut p2p = vec![0.0; len_ch];
     for i in (0..len_ch - 40).step_by(5) {
         let win_ch = &ch[i..i + 40];
-        let win_max = win_ch.iter().fold(std::f32::NEG_INFINITY, |max, &x| x.max(max));
-        let win_min = win_ch.iter().fold(std::f32::INFINITY, |min, &x| x.min(min));
+        let win_max = win_ch.iter().fold(f32::NEG_INFINITY, |max, &x| x.max(max));
+        let win_min = win_ch.iter().fold(f32::INFINITY, |min, &x| x.min(min));
         let p2pw = win_max - win_min;
         p2p[i+18] = p2pw;
         p2p[i+19] = p2pw;
@@ -185,6 +185,53 @@ fn get_p2p(ch: &Vec<f32>) -> Vec<f32> {
         p2p[i+22] = p2pw;
     }
     p2p
+}
+
+fn sign(x: f32) -> f32 {
+    if x > 0.0 {
+        1.0
+    } else if x < 0.0 {
+        -1.0
+    } else {
+        0.0
+    }
+}
+
+fn vec_sign(ch: &Vec<f32>) -> Vec<f32> {
+    let out = ch.iter().map(|&val| sign(val)).collect();
+    out
+}
+
+fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>){
+
+    let len_ch = ch.len();
+    let mut out = ch.to_owned();
+    let mut mask = vec![0.0; len_ch];
+
+    let signs = vec_sign(&ch);
+    let mut signs1 = signs.to_owned();
+    signs1.remove(0);
+    signs1.push(0.0);
+    let diff_signs: Vec<f32> = signs.iter().zip(signs1.iter()).map(|(val1, val2)| val1 - val2).collect();
+
+    let mut prev_ind = 0;
+    let mut flag: bool = false;
+
+    for i in 0..diff_signs.len() {
+        if p2p[i] > 5.5 {
+            flag = true;
+        }
+        if diff_signs[i] != 0.0 {
+            if flag == true {
+                let zeros = vec![0.0; i - prev_ind + 1];
+                let range = prev_ind..=i;
+                out.splice(range, zeros);
+            }
+            prev_ind = i;
+            flag = false;
+        }
+    }
+    (out, mask)
 }
 
 fn main() {
@@ -235,18 +282,22 @@ fn main() {
         .write_all(bytemuck::cast_slice(slice3))
         .expect("Не удалось записать в файл");
 
-    let fch1 = clean_ch(&ch1);
-    let fch2 = clean_ch(&ch2);
-    let fch3 = clean_ch(&ch3);
+    let cln_ch1 = clean_ch(&ch1);
+    let cln_ch2 = clean_ch(&ch2);
+    let cln_ch3 = clean_ch(&ch3);
 
-    // let fch1 = get_p2p(&cln_ch1);
-    // let fch2 = get_p2p(&cln_ch2);
-    // let fch3 = get_p2p(&cln_ch3);
+    let p2p_ch1 = get_p2p(&cln_ch1);
+    let p2p_ch2 = get_p2p(&cln_ch2);
+    let p2p_ch3 = get_p2p(&cln_ch3);
 
-    let slicef1: &[f32] = &fch1;
-    let slicef2: &[f32] = &fch2;
-    let slicef3: &[f32] = &fch3;
+    let art1 = del_artifacts(&cln_ch1, &p2p_ch1);
+    let art2 = del_artifacts(&cln_ch2, &p2p_ch2);
+    let art3 = del_artifacts(&cln_ch3, &p2p_ch3);
 
+    let slicef1: &[f32] = &art1.0;
+    let slicef2: &[f32] = &art2.0;
+    let slicef3: &[f32] = &art3.0;
+    // println!("4");
     filef1
         .write_all(bytemuck::cast_slice(slicef1))
         .expect("Не удалось записать в файл");
