@@ -2,8 +2,7 @@ use bytemuck;
 use std::fs::File;
 use std::io::Read;
 use std::io::Write;
-// use ndarray::{Array1, ArrayView1, ArrayViewMut1};
-// use ndarray::s;
+use ndarray::{Array, s};
 
 
 fn read_ecg() -> (Vec<f32>, Vec<f32>, Vec<f32>) {
@@ -170,19 +169,24 @@ fn clean_ch(ch: &Vec<f32>) -> Vec<f32> {
     // ch_del_ks
 }
 
-fn get_p2p(ch: &Vec<f32>) -> Vec<f32> {
+fn get_p2p(ch: &Vec<f32>, win: usize, sqr: bool) -> Vec<f32> {
+    let half_win = win / 2;
     let len_ch = ch.len();
     let mut p2p = vec![0.0; len_ch];
-    for i in (0..len_ch - 40).step_by(5) {
-        let win_ch = &ch[i..i + 40];
+    for i in (0..len_ch - &win).step_by(5) {
+        let win_ch = &ch[i..i + &win];
         let win_max = win_ch.iter().fold(f32::NEG_INFINITY, |max, &x| x.max(max));
         let win_min = win_ch.iter().fold(f32::INFINITY, |min, &x| x.min(min));
-        let p2pw = win_max - win_min;
-        p2p[i+18] = p2pw;
-        p2p[i+19] = p2pw;
-        p2p[i+20] = p2pw;
-        p2p[i+21] = p2pw;
-        p2p[i+22] = p2pw;
+        let mut p2pw = &win_max - &win_min;
+        if sqr {
+            p2pw = &p2pw * &p2pw;
+            if p2pw > 2.0 { p2pw = 2.0; }
+        }
+        p2p[i + half_win - 2] = p2pw;
+        p2p[i + half_win - 1] = p2pw;
+        p2p[i + half_win] = p2pw;
+        p2p[i + half_win + 1] = p2pw;
+        p2p[i + half_win + 2] = p2pw;
     }
     p2p
 }
@@ -202,17 +206,22 @@ fn vec_sign(ch: &Vec<f32>) -> Vec<f32> {
     out
 }
 
-fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>){
+fn diff(ch: &Vec<f32>) -> Vec<f32> {
+    let mut ch_copy = ch.to_owned();
+    let mut ch_copy1 = ch.to_owned();
+    ch_copy1.remove(0);
+    ch_copy1.push(0.0);
+    let diff_ch: Vec<f32> = ch_copy.iter().zip(ch_copy1.iter()).map(|(val1, val2)| val1 - val2).collect();
+    diff_ch
+}
 
+fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>) {
     let len_ch = ch.len();
     let mut out = ch.to_owned();
-    let mut mask = vec![0.0; len_ch];
+    let mut mask = vec![1.0; len_ch];
 
     let signs = vec_sign(&ch);
-    let mut signs1 = signs.to_owned();
-    signs1.remove(0);
-    signs1.push(0.0);
-    let diff_signs: Vec<f32> = signs.iter().zip(signs1.iter()).map(|(val1, val2)| val1 - val2).collect();
+    let diff_signs: Vec<f32> = diff(&signs);
 
     let mut prev_ind = 0;
     let mut flag: bool = false;
@@ -225,7 +234,8 @@ fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>){
             if flag == true {
                 let zeros = vec![0.0; i - prev_ind + 1];
                 let range = prev_ind..=i;
-                out.splice(range, zeros);
+                out.splice(range.clone(), zeros.clone());
+                mask.splice(range.clone(), zeros.clone());
             }
             prev_ind = i;
             flag = false;
@@ -234,16 +244,43 @@ fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>){
     (out, mask)
 }
 
+fn del_nouse(ch: &Vec<f32>, mask: &Vec<f32>) -> Vec<f32> {
+    let bhn = vec![0.89884553, -1.79769105, 0.89884553];
+    let ahn = vec![1.0, -1.78743252, 0.80794959];
+    let bln = vec![0.00034054, 0.00204323, 0.00510806, 0.00681075, 0.00510806, 0.00204323, 0.00034054];
+    let aln = vec![1.0, -3.5794348, 5.65866717, -4.96541523, 2.52949491, -0.70527411, 0.08375648];
+
+    let fch = my_filtfilt(&bhn, &ahn, &ch);
+    let fch = my_filtfilt(&bln, &aln, &fch);
+
+    let result: Vec<f32> = fch
+        .iter()
+        .zip(mask.iter())
+        .map(|(&x, &y)| x * y)
+        .collect();
+    result
+}
+
+fn var_ch(ch: Vec<f32>, len_win: usize) -> Vec<f32> {
+    let len_ch = ch.len();
+    let nd_ch = Array::from_vec(ch);
+    // let mut out = Array::zeros(len_ch);
+    let mut out = vec![0.0; len_ch];
+    let half_win = len_win / 2;
+    for i in half_win..(len_ch - half_win) {
+        let start = i - half_win;
+        let end = i + half_win;
+        let mut temp = nd_ch.slice(s![start..end]).var(0.0) * 10.0;
+        if temp > 2.0 {
+            temp = 2.0;
+        }
+        out[i] = temp;
+    }
+    out
+}
+
 fn main() {
     {
-        // bhn, ahn = butter(2, 6, 'hp', fs=250)
-        let bhn = vec![0.89884553, -1.79769105, 0.89884553];
-        let ahn = vec![1.0, -1.78743252, 0.80794959];
-
-        // bln, aln = butter(6, 25, 'lp', fs=250)
-        let bln = vec![0.00034054, 0.00204323, 0.00510806, 0.00681075, 0.00510806, 0.00204323, 0.00034054];
-        let aln = vec![1.0, -3.5794348, 5.65866717, -4.96541523, 2.52949491, -0.70527411, 0.08375648];
-
         // bi, ai = butter(2, 0.6, 'hp', fs=250)
         let bi = vec![0.98939373, -1.97878745, 0.98939373];
         let ai = vec![1.0, -1.97867496, 0.97889995];
@@ -286,18 +323,30 @@ fn main() {
     let cln_ch2 = clean_ch(&ch2);
     let cln_ch3 = clean_ch(&ch3);
 
-    let p2p_ch1 = get_p2p(&cln_ch1);
-    let p2p_ch2 = get_p2p(&cln_ch2);
-    let p2p_ch3 = get_p2p(&cln_ch3);
+    let p2p_ch1 = get_p2p(&cln_ch1, 40, false);
+    let p2p_ch2 = get_p2p(&cln_ch2, 40, false);
+    let p2p_ch3 = get_p2p(&cln_ch3, 40, false);
 
     let art1 = del_artifacts(&cln_ch1, &p2p_ch1);
     let art2 = del_artifacts(&cln_ch2, &p2p_ch2);
     let art3 = del_artifacts(&cln_ch3, &p2p_ch3);
 
-    let slicef1: &[f32] = &art1.0;
-    let slicef2: &[f32] = &art2.0;
-    let slicef3: &[f32] = &art3.0;
-    // println!("4");
+    let fch1 = del_nouse(&art1.0, &art1.1);
+    let fch2 = del_nouse(&art2.0, &art2.1);
+    let fch3 = del_nouse(&art3.0, &art3.1);
+
+    // let fch1 = var_ch(fch1, 30);
+    // let fch2 = var_ch(fch2, 30);
+    // let fch3 = var_ch(fch3, 30);
+
+    let fch1 = get_p2p(&fch1, 30, true);
+    let fch2 = get_p2p(&fch2, 30, true);
+    let fch3 = get_p2p(&fch3, 30, true);
+
+    let slicef1: &[f32] = &fch1;
+    let slicef2: &[f32] = &fch2;
+    let slicef3: &[f32] = &fch3;
+
     filef1
         .write_all(bytemuck::cast_slice(slicef1))
         .expect("Не удалось записать в файл");
