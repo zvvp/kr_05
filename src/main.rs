@@ -215,6 +215,19 @@ fn diff(ch: &Vec<f32>) -> Vec<f32> {
     diff_ch
 }
 
+fn get_trs(p2p:&Vec<f32>) -> f32 {
+    let sum_p2p: f32 = p2p
+        .iter()
+        .sum();
+    let mean_p2p: f32 = sum_p2p / p2p.len() as f32;
+    let (count, sum): (usize, f32) = p2p
+        .iter()
+        .filter(|&x| *x > mean_p2p)
+        .fold((0, 0.0), |(count, sum), &x| (count + 1, sum + x));
+    let trs = sum / count as f32;
+    trs
+}
+
 fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>) {
     let len_ch = ch.len();
     let mut out = ch.to_owned();
@@ -225,9 +238,9 @@ fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>) {
 
     let mut prev_ind = 0;
     let mut flag: bool = false;
-
+    let trs = get_trs(&p2p);
     for i in 0..diff_signs.len() {
-        if p2p[i] > 5.5 {
+        if p2p[i] > trs * 3.0 {                 // 5.5
             flag = true;
         }
         if diff_signs[i] != 0.0 {
@@ -335,13 +348,9 @@ fn main() {
     let fch2 = del_nouse(&art2.0, &art2.1);
     let fch3 = del_nouse(&art3.0, &art3.1);
 
-    // let fch1 = var_ch(fch1, 30);
-    // let fch2 = var_ch(fch2, 30);
-    // let fch3 = var_ch(fch3, 30);
-
-    let fch1 = get_p2p(&fch1, 30, true);
-    let fch2 = get_p2p(&fch2, 30, true);
-    let fch3 = get_p2p(&fch3, 30, true);
+    // let fch1 = get_p2p(&fch1, 30, true);
+    // let fch2 = get_p2p(&fch2, 30, true);
+    // let fch3 = get_p2p(&fch3, 30, true);
 
     let slicef1: &[f32] = &fch1;
     let slicef2: &[f32] = &fch2;
