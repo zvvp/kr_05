@@ -224,7 +224,10 @@ fn get_trs(p2p:&Vec<f32>) -> f32 {
         .iter()
         .filter(|&x| *x > mean_p2p)
         .fold((0, 0.0), |(count, sum), &x| (count + 1, sum + x));
-    let trs = sum / count as f32;
+    let mut trs = sum / count as f32;
+    if trs < 0.7 {
+        trs = 0.7;
+    }
     trs
 }
 
@@ -238,9 +241,10 @@ fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>) {
 
     let mut prev_ind = 0;
     let mut flag: bool = false;
-    let trs = get_trs(&p2p);
+    let mut trs = get_trs(&p2p);
+
     for i in 0..diff_signs.len() {
-        if p2p[i] > trs * 3.0 {                 // 5.5
+        if p2p[i] > trs * 3.8 {                 // 5.5
             flag = true;
         }
         if diff_signs[i] != 0.0 {
