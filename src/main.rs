@@ -18,8 +18,7 @@ impl Proc {
             let d1 = ch[i - 1] - ch[i - 2];
             let d2 = ch[i] - ch[i - 1];
             let d3 = ch[i + 1] - ch[i];
-            let d4 = ch[i + 2] - ch[i + 1];
-            let sum_d = d1.abs() + d2.abs() + d3.abs() + d4.abs();
+
             if (ch[i] - out[i - 1]).abs() > 1.95 {
                 let mut sort_win = win.to_vec();
                 sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -105,8 +104,8 @@ impl Proc {
     fn clean_ch(&self, ch: &Vec<f32>) -> Vec<f32> {
         let b = vec![0.0461318, 0.0922636, 0.0461318];
         let a = vec![1.0, -1.30728503, 0.49181224];
-        let mut proc = Proc {};
-        let ch_del_ks = proc.cut_impuls(&ch);
+        // let mut proc = Proc {};
+        let ch_del_ks = self.cut_impuls(&ch);
         let mut fch = ch_del_ks.clone();
 
         let spec24 = self.get_spec24(&ch_del_ks);
@@ -130,7 +129,7 @@ impl Proc {
             let win_min = win_ch.iter().fold(f32::INFINITY, |min, &x| x.min(min));
             let mut p2pw = &win_max - &win_min;
             if sqr {
-                p2pw = &p2pw * &p2pw;
+                p2pw = &p2pw * &p2pw * 1.5;
                 if p2pw > 2.0 { p2pw = 2.0; }
             }
             p2p[i + half_win - 2] = p2pw;
@@ -155,7 +154,7 @@ impl Proc {
         out
     }
     fn diff(&self, ch: &Vec<f32>) -> Vec<f32> {
-        let mut ch_copy = ch.to_owned();
+        let ch_copy = ch.to_owned();
         let mut ch_copy1 = ch.to_owned();
         ch_copy1.remove(0);
         ch_copy1.push(0.0);
@@ -187,7 +186,7 @@ impl Proc {
 
         let mut prev_ind = 0;
         let mut flag: bool = false;
-        let mut trs = self.get_trs(&p2p);
+        let trs = self.get_trs(&p2p);
 
         for i in 0..diff_signs.len() {
             if p2p[i] > trs * 3.8 {                 // 5.5
@@ -222,6 +221,69 @@ impl Proc {
             .collect();
         result
     }
+    fn filt_r(&self, ch: &Vec<f32>) -> Vec<f32> {
+        let blr = vec![0.00188141, 0.00188141];
+        let alr = vec![1.0, -0.99623718];
+        let bhr = vec![0.92867294, -0.92867294];
+        let ahr = vec![1.0, -0.85734589];
+        let out = self.my_filtfilt(&blr, &alr, &ch);
+        let out = out
+            .iter()
+            .map(|&x| x * 1000.0)
+            .collect();
+        let out = self.my_filtfilt(&bhr, &ahr, &out);
+        out
+    }
+    fn sum_ch(&self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>) -> Vec<f32> {
+        let result: Vec<f32> = ch1
+            .iter()
+            .zip(ch2.iter())
+            .zip(ch3.iter())
+            .map(|((&a, &b), &c)| {
+                let sum = a + b + c;
+                if sum > 1.5 {
+                    1.5
+                } else {
+                    sum
+                }
+            })
+            .collect();
+        result
+    }
+    fn pre_proc_r(&self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>) -> Vec<f32> {
+        let cln_ch1 = self.clean_ch(&ch1);
+        let cln_ch2 = self.clean_ch(&ch2);
+        let cln_ch3 = self.clean_ch(&ch3);
+
+        let p2p_ch1 = self.get_p2p(&cln_ch1, 40, false);
+        let p2p_ch2 = self.get_p2p(&cln_ch2, 40, false);
+        let p2p_ch3 = self.get_p2p(&cln_ch3, 40, false);
+
+        let art1 = self.del_artifacts(&cln_ch1, &p2p_ch1);
+        let art2 = self.del_artifacts(&cln_ch2, &p2p_ch2);
+        let art3 = self.del_artifacts(&cln_ch3, &p2p_ch3);
+
+        let fch1 = self.del_nouse(&art1.0, &art1.1);
+        let fch2 = self.del_nouse(&art2.0, &art2.1);
+        let fch3 = self.del_nouse(&art3.0, &art3.1);
+
+        let fch1 = self.get_p2p(&fch1, 30, true);
+        let fch2 = self.get_p2p(&fch2, 30, true);
+        let fch3 = self.get_p2p(&fch3, 30, true);
+
+        let fch1 = self.filt_r(&fch1);
+        let fch2 = self.filt_r(&fch2);
+        let fch3 = self.filt_r(&fch3);
+        let sum_leads = self.sum_ch(&fch1, &fch2, &fch3);
+        sum_leads
+    }
+    fn del_isoline(&self, ch:&Vec<f32>) -> Vec<f32> {
+        // bi, ai = butter(2, 0.6, 'hp', fs=250)
+        let bi = vec![0.98939373, -1.97878745, 0.98939373];
+        let ai = vec![1.0, -1.97867496, 0.97889995];
+        let out = self.my_filtfilt(&bi, &ai, &ch);
+        out
+    }
 }
 
 struct Ecg {
@@ -231,13 +293,13 @@ struct Ecg {
     age: String,
     number_room: String,
     number_history: String,
-    leed1: Vec<f32>,
-    leed2: Vec<f32>,
-    leed3: Vec<f32>,
-    len_leed: usize,
+    lead1: Vec<f32>,
+    lead2: Vec<f32>,
+    lead3: Vec<f32>,
+    len_lead: usize,
     ind_r: Vec<u64>,
-    intervals_r: Vec<u32>,
-    div_intervals: Vec<f32>,
+    intervals_r: Vec<u64>,
+    div_intervals: Vec<Option<f32>>,
 }
 
 impl Ecg {
@@ -283,10 +345,52 @@ impl Ecg {
         let ch_2: Vec<f32> = ch_2.iter().map(|&val| val - mean_ch_2).collect();
         let ch_3: Vec<f32> = ch_3.iter().map(|&val| val - mean_ch_3).collect();
 
-        self.leed1 = ch_1;
-        self.leed2 = ch_2;
-        self.leed3 = ch_3;
-        self.len_leed = self.leed1.len();
+        self.lead1 = ch_1;
+        self.lead2 = ch_2;
+        self.lead3 = ch_3;
+        self.len_lead = self.lead1.len();
+    }
+
+    fn get_ind_r(&mut self, ch: &Vec<f32>) {
+        let mut max_val: f32 = 0.0;
+        let mut ind_max = 0;
+        let mut interval: u64 = 0;
+        for (ind, val) in ch.iter().enumerate() {
+            if *val > max_val {
+                max_val = *val;
+                ind_max = ind as u64;
+            }
+            if *val <= 0.0 && max_val > 0.0 {
+                max_val = 0.0;
+                // self.ind_r.push(ind_max);
+                if self.intervals_r.len() == 0 {
+                    self.intervals_r.push(ind_max);
+                } else {
+                    interval = ind_max - self.ind_r[self.ind_r.len() - 1];
+                    self.intervals_r.push(interval);
+                }
+                self.ind_r.push(ind_max);
+            }
+        }
+    }
+
+    fn get_div_intervals(&mut self) {
+        if self.intervals_r.len() > 0 {
+            let mut intervals = self.intervals_r.to_owned();
+            intervals.push(self.intervals_r[self.intervals_r.len() - 1]);
+            intervals.remove(0);
+            self.div_intervals = self.intervals_r
+                .iter()
+                .zip(intervals.iter())
+                .map(|(&x, &y)| {
+                    if y > 0 {
+                        Some(x as f32 / y as f32)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
     }
 }
 
@@ -298,28 +402,20 @@ fn main() {
         age: "".to_string(),
         number_room: "".to_string(),
         number_history: "".to_string(),
-        leed1: vec![],
-        leed2: vec![],
-        leed3: vec![],
-        len_leed: 0,
+        lead1: vec![],
+        lead2: vec![],
+        lead3: vec![],
+        len_lead: 0,
         ind_r: vec![],
         intervals_r: vec![],
         div_intervals: vec![],
     };
-    let mut proc = Proc {};
-    // {
+    let proc = Proc {};
+
     //     // bi, ai = butter(2, 0.6, 'hp', fs=250)
     //     let bi = vec![0.98939373, -1.97878745, 0.98939373];
     //     let ai = vec![1.0, -1.97867496, 0.97889995];
-    //
-    //     // blr, alr = butter(1, 0.15, 'lp', fs=250)
-    //     let blr = vec![0.00188141, 0.00188141];
-    //     let alr = vec![1.0, -0.99623718];
-    //
-    //     // bhr, ahr = butter(1, 6.1, 'hp', fs=250)
-    //     let bhr = vec![0.92867294, -0.92867294];
-    //     let ahr = vec![1.0, -0.85734589];
-    // }
+
     let mut file1 = File::create("ch1.bin").expect("Не удалось создать файл");
     let mut file2 = File::create("ch2.bin").expect("Не удалось создать файл");
     let mut file3 = File::create("ch3.bin").expect("Не удалось создать файл");
@@ -327,16 +423,12 @@ fn main() {
     let mut filef2 = File::create("fch2.bin").expect("Не удалось создать файл");
     let mut filef3 = File::create("fch3.bin").expect("Не удалось создать файл");
 
-
     ecg.read_ecg();
 
-    let mut ch1 = ecg.leed1;
-    let mut ch2 = ecg.leed2;
-    let mut ch3 = ecg.leed3;
 
-    let slice1: &[f32] = &ch1;
-    let slice2: &[f32] = &ch2;
-    let slice3: &[f32] = &ch3;
+    let slice1: &[f32] = &ecg.lead1;
+    let slice2: &[f32] = &ecg.lead2;
+    let slice3: &[f32] = &ecg.lead3;
 
     file1
         .write_all(bytemuck::cast_slice(slice1))
@@ -348,36 +440,28 @@ fn main() {
         .write_all(bytemuck::cast_slice(slice3))
         .expect("Не удалось записать в файл");
 
-    let cln_ch1 = proc.clean_ch(&ch1);
-    let cln_ch2 = proc.clean_ch(&ch2);
-    let cln_ch3 = proc.clean_ch(&ch3);
+    let sum_leads = proc.pre_proc_r(&ecg.lead1, &ecg.lead2, &ecg.lead3);
+    let _ = ecg.get_ind_r(&sum_leads);
+    let _ = ecg.get_div_intervals();
 
-    let p2p_ch1 = proc.get_p2p(&cln_ch1, 40, false);
-    let p2p_ch2 = proc.get_p2p(&cln_ch2, 40, false);
-    let p2p_ch3 = proc.get_p2p(&cln_ch3, 40, false);
+    println!("{}", &ecg.ind_r[0]);
+    println!("{:?}", &ecg.div_intervals[0]);
+    println!("{}", &ecg.ind_r[1]);
+    println!("{:?}", &ecg.div_intervals[1]);
+    println!("{}", &ecg.ind_r[2]);
+    println!("{:?}", &ecg.div_intervals[2]);
+    println!("{}", &ecg.ind_r[3]);
+    println!("{:?}", &ecg.div_intervals[3]);
+    println!("{}", &ecg.ind_r[4]);
+    println!("{:?}", &ecg.div_intervals[4]);
+    println!("{}", &ecg.ind_r[5]);
+    println!("{:?}", &ecg.div_intervals[5]);
+    println!("{}", &ecg.ind_r[6]);
+    println!("{:?}", &ecg.div_intervals[6]);
 
-    let art1 = proc.del_artifacts(&cln_ch1, &p2p_ch1);
-    let art2 = proc.del_artifacts(&cln_ch2, &p2p_ch2);
-    let art3 = proc.del_artifacts(&cln_ch3, &p2p_ch3);
 
-    let fch1 = proc.del_nouse(&art1.0, &art1.1);
-    let fch2 = proc.del_nouse(&art2.0, &art2.1);
-    let fch3 = proc.del_nouse(&art3.0, &art3.1);
+    let slicef3: &[f32] = &sum_leads;
 
-    // let fch1 = get_p2p(&fch1, 30, true);
-    // let fch2 = get_p2p(&fch2, 30, true);
-    // let fch3 = get_p2p(&fch3, 30, true);
-
-    let slicef1: &[f32] = &fch1;
-    let slicef2: &[f32] = &fch2;
-    let slicef3: &[f32] = &fch3;
-
-    filef1
-        .write_all(bytemuck::cast_slice(slicef1))
-        .expect("Не удалось записать в файл");
-    filef2
-        .write_all(bytemuck::cast_slice(slicef2))
-        .expect("Не удалось записать в файл");
     filef3
         .write_all(bytemuck::cast_slice(slicef3))
         .expect("Не удалось записать в файл");
