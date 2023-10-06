@@ -2,7 +2,9 @@ use bytemuck;
 use std::fs::File;
 use std::io::Read;
 use std::io::Write;
-// use ndarray::{Array, s};
+use ndarray::prelude::*;
+use ndarray::Array1;
+use ndarray_stats::*;
 
 struct Proc {}
 
@@ -350,7 +352,6 @@ impl Ecg {
         self.lead3 = ch_3;
         self.len_lead = self.lead1.len();
     }
-
     fn get_ind_r(&mut self, ch: &Vec<f32>) {
         let mut max_val: f32 = 0.0;
         let mut ind_max = 0;
@@ -373,7 +374,6 @@ impl Ecg {
             }
         }
     }
-
     fn get_div_intervals(&mut self) {
         if self.intervals_r.len() > 0 {
             let mut intervals = self.intervals_r.to_owned();
@@ -391,6 +391,65 @@ impl Ecg {
                 })
                 .collect();
         }
+    }
+}
+
+struct FormsQrs {
+    ref_form1: Vec<f32>,
+    ref_form2: Vec<f32>,
+    ref_form3: Vec<f32>,
+}
+
+impl FormsQrs {
+
+    fn norm_qrs(&mut self, mut qrs: Vec<f32>) -> Vec<f32> {
+        let mut min:f32 = 0.0;
+        let mut max:f32 = 0.0;
+        for i in 0..qrs.len() {
+            if qrs[i] < min {min = qrs[i]};
+        }
+        for i in 0..qrs.len() {
+            qrs[i] = qrs[i] - min;
+        }
+        for i in 0..qrs.len() {
+            if qrs[i] > max { max = qrs[i]};
+        }
+        if max != 0.0 {
+            for i in 0..qrs.len() {
+                qrs[i] /= max;
+            }
+        }
+        qrs
+    }
+    fn get_coef_cor(&mut self, x: Vec<f32>, y: Vec<f32>) -> f32{
+        let norm_x = self.norm_qrs(x);
+        let norm_y = self.norm_qrs(y);
+        let arr_x = Array1::from(norm_x);
+        let arr_y = Array1::from(norm_y);
+        let mean_x: f32 = arr_x.mean().unwrap();
+        let mean_y: f32 = arr_y.mean().unwrap();
+        let arr_xy = &arr_x * &arr_y;
+        let mean_xy = Array1::from(arr_xy).mean().unwrap();
+        let std_x = &arr_x.std(0.0);
+        let std_y = &arr_y.std(0.0);
+        let std_xy = std_x * std_y;
+        let mut out: f32 = 0.0;
+        if std_xy != 0.0 {
+            out = (&mean_xy - &mean_x * &mean_y) / &std_xy;
+        } else { out = 0.0; }
+        out
+    }
+    // fn get_ref_forms(&self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<u64>) {
+    //     for i in ..(ind_r.len() - 1) {
+    //         let qrs1_1 = &ch1[ind_r[i] - 35..ind_r[i] + 36];
+    //     }
+    // }
+    fn get_ref_forms(&mut self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: Vec<u64>) {
+        let start_index = (ind_r[4] - 35) as usize;
+        let end_index = (ind_r[4] + 36) as usize;
+        let _ = &self.ref_form1.copy_from_slice(&ch1[start_index..end_index]);
+        let _ = &self.ref_form2.copy_from_slice(&ch1[start_index..end_index]);
+        let _ = &self.ref_form3.copy_from_slice(&ch1[start_index..end_index]);
     }
 }
 
@@ -412,10 +471,6 @@ fn main() {
     };
     let proc = Proc {};
 
-    //     // bi, ai = butter(2, 0.6, 'hp', fs=250)
-    //     let bi = vec![0.98939373, -1.97878745, 0.98939373];
-    //     let ai = vec![1.0, -1.97867496, 0.97889995];
-
     let mut file1 = File::create("ch1.bin").expect("Не удалось создать файл");
     let mut file2 = File::create("ch2.bin").expect("Не удалось создать файл");
     let mut file3 = File::create("ch3.bin").expect("Не удалось создать файл");
@@ -424,7 +479,6 @@ fn main() {
     let mut filef3 = File::create("fch3.bin").expect("Не удалось создать файл");
 
     ecg.read_ecg();
-
 
     let slice1: &[f32] = &ecg.lead1;
     let slice2: &[f32] = &ecg.lead2;
@@ -444,21 +498,20 @@ fn main() {
     let _ = ecg.get_ind_r(&sum_leads);
     let _ = ecg.get_div_intervals();
 
-    println!("{}", &ecg.ind_r[0]);
-    println!("{:?}", &ecg.div_intervals[0]);
-    println!("{}", &ecg.ind_r[1]);
-    println!("{:?}", &ecg.div_intervals[1]);
-    println!("{}", &ecg.ind_r[2]);
-    println!("{:?}", &ecg.div_intervals[2]);
-    println!("{}", &ecg.ind_r[3]);
-    println!("{:?}", &ecg.div_intervals[3]);
-    println!("{}", &ecg.ind_r[4]);
-    println!("{:?}", &ecg.div_intervals[4]);
-    println!("{}", &ecg.ind_r[5]);
-    println!("{:?}", &ecg.div_intervals[5]);
-    println!("{}", &ecg.ind_r[6]);
-    println!("{:?}", &ecg.div_intervals[6]);
+    let mut forms = FormsQrs {
+        ref_form1: vec![0.0; 71],
+        ref_form2: vec![0.0; 71],
+        ref_form3: vec![0.0; 71],
+    };
 
+    let _ = forms.get_ref_forms(&ecg.lead1, &ecg.lead2, &ecg.lead3, ecg.ind_r);
+    let ref1 = forms.ref_form1.to_owned();
+    forms.ref_form1 = forms.norm_qrs(ref1);
+    let ref2 = forms.ref_form2.to_owned();
+    forms.ref_form2 = forms.norm_qrs(ref2);
+    let ref3 = forms.ref_form3.to_owned();
+    forms.ref_form3 = forms.norm_qrs(ref3);
+    println!("{:?}", forms.ref_form1);
 
     let slicef3: &[f32] = &sum_leads;
 
