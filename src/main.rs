@@ -279,7 +279,7 @@ impl Proc {
         let sum_leads = self.sum_ch(&fch1, &fch2, &fch3);
         sum_leads
     }
-    fn del_isoline(&self, ch:&Vec<f32>) -> Vec<f32> {
+    fn del_isoline(&self, ch: &Vec<f32>) -> Vec<f32> {
         // bi, ai = butter(2, 0.6, 'hp', fs=250)
         let bi = vec![0.98939373, -1.97878745, 0.98939373];
         let ai = vec![1.0, -1.97867496, 0.97889995];
@@ -288,13 +288,16 @@ impl Proc {
     }
 }
 
-struct Ecg {
+struct Pacient {
     time: String,
     date: String,
     pacient: String,
     age: String,
     number_room: String,
     number_history: String,
+}
+
+struct Ecg {
     lead1: Vec<f32>,
     lead2: Vec<f32>,
     lead3: Vec<f32>,
@@ -311,8 +314,10 @@ impl Ecg {
         println!("{:?}", fname);
 
         let mut file = File::open(fname).expect("Failed to open file");
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer).expect("Failed to read file");
+        // let mut buffer = Vec::new();
+        let mut buffer = [0; 900000];
+        // file.read_to_end(&mut buffer).expect("Failed to read file");
+        file.read(&mut buffer[..]).expect("Failed to read file");
 
         let ecg: Vec<i16> = buffer[1024..]
             .chunks(2)
@@ -398,34 +403,40 @@ struct FormsQrs {
     ref_form1: Vec<f32>,
     ref_form2: Vec<f32>,
     ref_form3: Vec<f32>,
+    // qrs1: Vec<f32>,
+    // qrs2: Vec<f32>,
+    // qrs3: Vec<f32>,
 }
 
 impl FormsQrs {
-
-    fn norm_qrs(&mut self, mut qrs: Vec<f32>) -> Vec<f32> {
-        let mut min:f32 = 0.0;
-        let mut max:f32 = 0.0;
-        for i in 0..qrs.len() {
-            if qrs[i] < min {min = qrs[i]};
+    fn norm_qrs(&self, qrs: &Vec<f32>) -> Vec<f32> {
+        let mut min: f32 = 0.0;
+        let mut max: f32 = 0.0;
+        for item in qrs.iter() {
+            if *item < min {
+                min = *item;
+            }
         }
         for i in 0..qrs.len() {
-            qrs[i] = qrs[i] - min;
+            qrs[i] -= min;
         }
-        for i in 0..qrs.len() {
-            if qrs[i] > max { max = qrs[i]};
+        for item in qrs.iter() {
+            if *item > max {
+                max = *item;
+            }
         }
         if max != 0.0 {
             for i in 0..qrs.len() {
                 qrs[i] /= max;
             }
         }
-        qrs
+        qrs.to_vec()
     }
-    fn get_coef_cor(&mut self, x: Vec<f32>, y: Vec<f32>) -> f32{
-        let norm_x = self.norm_qrs(x);
-        let norm_y = self.norm_qrs(y);
-        let arr_x = Array1::from(norm_x);
-        let arr_y = Array1::from(norm_y);
+    fn get_coef_cor(&self, x: &Vec<f32>, y: &Vec<f32>) -> f32 {
+        let norm_x = &self.norm_qrs(x);
+        let norm_y = &self.norm_qrs(y);
+        let arr_x = Array1::from_vec(norm_x.to_vec());
+        let arr_y = Array1::from_vec(norm_y.to_vec());
         let mean_x: f32 = arr_x.mean().unwrap();
         let mean_y: f32 = arr_y.mean().unwrap();
         let arr_xy = &arr_x * &arr_y;
@@ -439,28 +450,71 @@ impl FormsQrs {
         } else { out = 0.0; }
         out
     }
-    // fn get_ref_forms(&self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<u64>) {
-    //     for i in ..(ind_r.len() - 1) {
-    //         let qrs1_1 = &ch1[ind_r[i] - 35..ind_r[i] + 36];
+    fn get_ref_forms(&self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<u64>) {
+        for i in 1..ind_r.len() - 1 {
+            let start_index = (ind_r[i] - 35) as usize;
+            let end_index = (ind_r[i] + 36) as usize;
+            let qrs1 = &ch1[start_index..end_index].to_vec();
+            let qrs2 = &ch2[start_index..end_index].to_vec();
+            let qrs3 = &ch3[start_index..end_index].to_vec();
+            let start_index = (ind_r[i + 1] - 35) as usize;
+            let end_index = (ind_r[i + 1] + 36) as usize;
+            let qrs11 = &ch1[start_index..end_index].to_vec();
+            let qrs22 = &ch2[start_index..end_index].to_vec();
+            let qrs33 = &ch3[start_index..end_index].to_vec();
+
+            let cor1 = self.get_coef_cor(&qrs1, &qrs11);
+            let cor2 = self.get_coef_cor(&qrs2, &qrs22);
+            let cor3 = self.get_coef_cor(&qrs3, &qrs33);
+
+            if cor1 > 0.93 && cor2 > 0.93 && cor3 > 0.93 {
+                &self.ref_form1 = &qrs1;
+                &self.ref_form2 = &qrs2;
+                &self.ref_form3 = &qrs3;
+                break;
+            }
+        }
+    }
+    fn get_ind_zero(&self, ind_forms: &Vec<u64>) -> Vec<u64> {
+        let mut out = vec![] as Vec<u64>;
+        for i in 0..ind_forms.len() {
+            if ind_forms[i] == 0 {
+                out.push(i as u64);
+            }
+        }
+        out
+    }
+    fn get_rem_ind_r(&self, ind_r: &Vec<u64>, ind_rem: &Vec<u64>) -> Vec<u64> {
+        let mut out = vec![] as Vec<u64>;
+        for i in 0..ind_rem.len() {
+            out.push(ind_r[ind_rem[i] as usize]);
+        }
+        out
+    }
+
+    // fn get_ind_types(&self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<u64>) {
+    //     let mut ind_forms:Vec<u64> = vec![0; ind_r.len()];
+    //     for k in 1..100 {
+    //         let ind_rem = self.get_ind_zero(&mut ind_forms);
+    //         let rem_ind_r = self.get_rem_ind_r(&ind_r, &ind_rem);
+    //         let _ = &self.get_ref_forms(&ch1, &ch2, &ch3, &rem_ind_r);
+    //         for i in 0..ind_rem.len() {
+    //             let mut coef_cor1 = vec![0.0; 9];
+    //             let mut coef_cor2 = vec![0.0; 9];
+    //             let mut coef_cor3 = vec![0.0; 9];
+    //             for j in 0..9 {
+    //                 let qrs1 = &ch1[ind_r[i] as usize - 35 + j - 4..ind_r[i] as usize + 36 + j - 4].to_vec();
+    //                 // let mut ref_form11 = &mut self.ref_form1;
+    //                 coef_cor1[j] = self.get_coef_cor(&qrs1, &self.ref_form1);
+    //             }
+    //
+    //         }
     //     }
     // }
-    fn get_ref_forms(&mut self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: Vec<u64>) {
-        let start_index = (ind_r[4] - 35) as usize;
-        let end_index = (ind_r[4] + 36) as usize;
-        let _ = &self.ref_form1.copy_from_slice(&ch1[start_index..end_index]);
-        let _ = &self.ref_form2.copy_from_slice(&ch1[start_index..end_index]);
-        let _ = &self.ref_form3.copy_from_slice(&ch1[start_index..end_index]);
-    }
 }
 
 fn main() {
     let mut ecg = Ecg {
-        time: "".to_string(),
-        date: "".to_string(),
-        pacient: "".to_string(),
-        age: "".to_string(),
-        number_room: "".to_string(),
-        number_history: "".to_string(),
         lead1: vec![],
         lead2: vec![],
         lead3: vec![],
@@ -499,19 +553,22 @@ fn main() {
     let _ = ecg.get_div_intervals();
 
     let mut forms = FormsQrs {
-        ref_form1: vec![0.0; 71],
-        ref_form2: vec![0.0; 71],
-        ref_form3: vec![0.0; 71],
+        ref_form1: vec![],
+        ref_form2: vec![],
+        ref_form3: vec![],
+        // qrs1: vec![0.0; 71],
+        // qrs2: vec![0.0; 71],
+        // qrs3: vec![0.0; 71],
     };
 
-    let _ = forms.get_ref_forms(&ecg.lead1, &ecg.lead2, &ecg.lead3, ecg.ind_r);
-    let ref1 = forms.ref_form1.to_owned();
-    forms.ref_form1 = forms.norm_qrs(ref1);
-    let ref2 = forms.ref_form2.to_owned();
-    forms.ref_form2 = forms.norm_qrs(ref2);
-    let ref3 = forms.ref_form3.to_owned();
-    forms.ref_form3 = forms.norm_qrs(ref3);
-    println!("{:?}", forms.ref_form1);
+    let _ = forms.get_ref_forms(&ecg.lead1, &ecg.lead2, &ecg.lead3, &ecg.ind_r);
+
+    forms.ref_form1 = forms.norm_qrs(&mut forms.ref_form1.to_owned());
+    forms.ref_form2 = forms.norm_qrs(&mut forms.ref_form2.to_owned());
+    forms.ref_form3 = forms.norm_qrs(&mut forms.ref_form3.to_owned());
+
+    let cor = forms.get_coef_cor(&mut forms.ref_form1.to_owned(), &mut forms.ref_form3.to_owned());
+    println!("{}", cor);
 
     let slicef3: &[f32] = &sum_leads;
 
