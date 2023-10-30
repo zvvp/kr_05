@@ -5,6 +5,7 @@ use std::io::Write;
 use ndarray::prelude::*;
 use ndarray::Array1;
 use ndarray_stats::*;
+use crate::proc_ecg::{clean_ch, del_artifacts, del_isoline, filt_r, get_p2p};
 
 mod ecg_data {
     // use bytemuck;
@@ -12,6 +13,7 @@ mod ecg_data {
     use std::io::Read;
     use std::io::Write;
     use crate::proc_ecg::pre_proc_r;
+
     struct Pacient {
         time: String,
         date: String,
@@ -26,8 +28,8 @@ mod ecg_data {
         pub lead2: Vec<f32>,
         pub lead3: Vec<f32>,
         pub len_lead: usize,
-        pub ind_r: Vec<u64>,
-        pub intervals_r: Vec<u64>,
+        pub ind_r: Vec<usize>,
+        pub intervals_r: Vec<usize>,
         pub div_intervals: Vec<Option<f32>>,
     }
 
@@ -81,17 +83,17 @@ mod ecg_data {
             self.lead3 = ch_3;
             self.len_lead = self.lead1.len();
             let sum_leads = pre_proc_r(&self.lead1, &self.lead2, &self.lead3);
-            self.get_ind_r(&sum_leads);
+            self.get_ind_r(&sum_leads.0);
             self.get_div_intervals();
         }
         fn get_ind_r(&mut self, ch: &Vec<f32>) {
             let mut max_val: f32 = 0.0;
             let mut ind_max = 0;
-            let mut interval: u64 = 0;
+            let mut interval = 0;
             for (ind, val) in ch.iter().enumerate() {
                 if *val > max_val {
                     max_val = *val;
-                    ind_max = ind as u64;
+                    ind_max = ind;
                 }
                 if *val <= 0.0 && max_val > 0.0 {
                     max_val = 0.0;
@@ -105,11 +107,17 @@ mod ecg_data {
                     self.ind_r.push(ind_max);
                 }
             }
+            while self.ind_r[0] < 50 {
+                self.ind_r.remove(0);
+            }
+            if (ch.len() - self.ind_r[self.ind_r.len() - 1]) < 40 {
+                self.ind_r.remove(self.ind_r.len() - 1);
+            }
         }
         fn get_div_intervals(&mut self) {
             if self.intervals_r.len() > 0 {
                 let mut intervals = self.intervals_r.to_owned();
-                intervals.push(self.intervals_r[self.intervals_r.len() - 1]);
+                intervals.push(intervals[intervals.len() - 1]);
                 intervals.remove(0);
                 self.div_intervals = self.intervals_r
                     .iter()
@@ -132,6 +140,10 @@ mod proc_ecg {
         let mut out = ch.clone();
         let mut win = [0.0; 11];
         let lench = ch.len();
+        let diff_ch = my_diff(&ch);
+        let abs_diff: Vec<f32> = diff_ch.iter().map(|&x| x.abs()).collect();
+        let trs: f32 = get_trs(&abs_diff);
+        // dbg!(trs * 6.0);
 
         for i in (3..lench - 5).step_by(1) {
             let j = i % 11;
@@ -139,8 +151,8 @@ mod proc_ecg {
             let d1 = ch[i - 1] - ch[i - 2];
             let d2 = ch[i] - ch[i - 1];
             let d3 = ch[i + 1] - ch[i];
-
-            if (ch[i] - out[i - 1]).abs() > 1.95 {
+            if abs_diff[i] > trs * 9.0 { // 2.00
+            // if (ch[i] - out[i - 1]).abs() > trs * 7.0 { // 2.00
                 let mut sort_win = win.to_vec();
                 sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 out[i - 2] = sort_win[5];
@@ -149,10 +161,12 @@ mod proc_ecg {
                 out[i + 1] = sort_win[5];
                 out[i + 2] = sort_win[5];
                 out[i + 3] = sort_win[5];
-                out[i + 4] = sort_win[5];
-                out[i + 5] = sort_win[5];
+                // out[i + 4] = sort_win[5];
+                // out[i + 5] = sort_win[5];
             }
-            if (d1.signum() != d2.signum()) && (d2.signum() != d3.signum()) && ((d1.abs() + d2.abs() + d3.abs()) > 0.7) {
+            // dbg!(d2.abs() + d3.abs());
+            // dbg!(trs*0.5);
+            if (d1.signum() != d2.signum()) && (d2.signum() != d3.signum()) && ((d1.abs() + d2.abs() + d3.abs()) > trs * 100.0) {  // 2.0
                 let mut sort_win = win.to_vec();
                 sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 out[i - 2] = sort_win[5];
@@ -160,11 +174,23 @@ mod proc_ecg {
                 out[i] = sort_win[5];
                 out[i + 1] = sort_win[5];
                 out[i + 2] = sort_win[5];
+                out[i + 3] = sort_win[5];
             }
+            // if (d2.signum() != d3.signum()) && ((d2 + d3).abs() < trs * 6.0) && ((d2.abs() + d3.abs()) > trs * 6.0) {  // 2.2, 0.2 0.4
+            //     let mut sort_win = win.to_vec();
+            //     sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            //     out[i - 2] = sort_win[5];
+            //     out[i - 1] = sort_win[5];
+            //     out[i] = sort_win[5];
+            //     out[i + 1] = sort_win[5];
+            //     out[i + 2] = sort_win[5];
+            //     out[i + 3] = sort_win[5];
+            // }
         }
         out
     }
-    fn my_filtfilt(b: &Vec<f32>, a: &Vec<f32>, ch: &Vec<f32>) -> Vec<f32> {
+
+    pub fn my_filtfilt(b: &Vec<f32>, a: &Vec<f32>, ch: &Vec<f32>) -> Vec<f32> {
         let mut temp = ch.to_owned();
         let mut out = ch.to_owned();
         let len_b = b.len();
@@ -192,6 +218,7 @@ mod proc_ecg {
         }
         out
     }
+
     fn get_spec24(ch: &Vec<f32>) -> Vec<f32> {
         let bp = vec![0.05695238, 0.0, -0.05695238];
         let ap = vec![1.0, -1.55326091, 0.88609524];
@@ -209,6 +236,7 @@ mod proc_ecg {
 
         spec24
     }
+
     fn get_spec50(ch: &Vec<f32>) -> Vec<f32> {
         let bp = vec![0.13672874, 0.0, -0.13672874];
         let ap = vec![1.0, -0.53353098, 0.72654253];
@@ -222,11 +250,16 @@ mod proc_ecg {
 
         spec50
     }
-    fn clean_ch(ch: &Vec<f32>) -> Vec<f32> {
+
+    pub fn clean_ch(ch: &Vec<f32>) -> Vec<f32> {
+        // b, a = butter(2, 20, 'lp', fs=250)
         let b = vec![0.0461318, 0.0922636, 0.0461318];
         let a = vec![1.0, -1.30728503, 0.49181224];
-        // let mut proc = Proc {};
+        // b, a = butter(2, 12, 'lp', fs=250)
+        // let b = vec![0.0186504, 0.03730079, 0.0186504];
+        // let a = vec![1.0, -1.57823618, 0.65283776];
         let ch_del_ks = cut_impuls(&ch);
+        let ch_del_ks = cut_impuls(&ch_del_ks);
         let mut fch = ch_del_ks.clone();
 
         let spec24 = get_spec24(&ch_del_ks);
@@ -240,18 +273,19 @@ mod proc_ecg {
         }
         fch
     }
-    fn get_p2p(ch: &Vec<f32>, win: usize, sqr: bool) -> Vec<f32> {
+
+    pub fn get_p2p(ch: &Vec<f32>, win: usize, sqr: bool) -> Vec<f32> {
         let half_win = win / 2;
         let len_ch = ch.len();
         let mut p2p = vec![0.0; len_ch];
-        for i in (0..len_ch - &win).step_by(5) {
+        for i in (0..len_ch - &win).step_by(2) {
             let win_ch = &ch[i..i + &win];
             let win_max = win_ch.iter().fold(f32::NEG_INFINITY, |max, &x| x.max(max));
             let win_min = win_ch.iter().fold(f32::INFINITY, |min, &x| x.min(min));
             let mut p2pw = &win_max - &win_min;
             if sqr {
-                p2pw = &p2pw * &p2pw * 1.5;
-                if p2pw > 2.0 { p2pw = 2.0; }
+                p2pw = &p2pw * &p2pw;
+                // if p2pw > 2.0 {p2pw = 2.0};
             }
             p2p[i + half_win - 2] = p2pw;
             p2p[i + half_win - 1] = p2pw;
@@ -259,8 +293,20 @@ mod proc_ecg {
             p2p[i + half_win + 1] = p2pw;
             p2p[i + half_win + 2] = p2pw;
         }
+        if sqr {
+            let trs = get_trs(&p2p);
+            // dbg!(trs);
+            if trs > 0.0 {
+                for i in 0..p2p.len() {
+                    p2p[i] /= trs;
+                    // if p2p[i] > 1.5 {p2p[i] = 1.0;}
+                    if p2p[i] > trs * 1.5 { p2p[i] = trs * 1.5 + 0.1 * p2p[i]; }
+                }
+            }
+        }
         p2p
     }
+
     fn sign(x: f32) -> f32 {
         if x > 0.0 {
             1.0
@@ -270,11 +316,13 @@ mod proc_ecg {
             0.0
         }
     }
+
     fn vec_sign(ch: &Vec<f32>) -> Vec<f32> {
         let out = ch.iter().map(|&val| sign(val)).collect();
         out
     }
-    fn diff(ch: &Vec<f32>) -> Vec<f32> {
+
+    fn my_diff(ch: &Vec<f32>) -> Vec<f32> {
         let ch_copy = ch.to_owned();
         let mut ch_copy1 = ch.to_owned();
         ch_copy1.remove(0);
@@ -282,7 +330,8 @@ mod proc_ecg {
         let diff_ch: Vec<f32> = ch_copy.iter().zip(ch_copy1.iter()).map(|(val1, val2)| val1 - val2).collect();
         diff_ch
     }
-    fn get_trs(p2p: &Vec<f32>) -> f32 {
+
+    pub fn get_trs(p2p: &Vec<f32>) -> f32 {
         let sum_p2p: f32 = p2p
             .iter()
             .sum();
@@ -292,25 +341,23 @@ mod proc_ecg {
             .filter(|&x| *x > mean_p2p)
             .fold((0, 0.0), |(count, sum), &x| (count + 1, sum + x));
         let mut trs = sum / count as f32;
-        if trs < 0.7 {
-            trs = 0.7;
-        }
         trs
     }
-    fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>) {
+
+    pub fn del_artifacts(ch: &Vec<f32>, p2p: &Vec<f32>) -> (Vec<f32>, Vec<f32>) {
         let len_ch = ch.len();
         let mut out = ch.to_owned();
         let mut mask = vec![1.0; len_ch];
 
         let signs = vec_sign(&ch);
-        let diff_signs: Vec<f32> = diff(&signs);
+        let diff_signs: Vec<f32> = my_diff(&signs);
 
         let mut prev_ind = 0;
         let mut flag: bool = false;
         let trs = get_trs(&p2p);
 
-        for i in 0..diff_signs.len() {
-            if p2p[i] > trs * 3.8 {                 // 5.5
+        for i in 0..diff_signs.len() - 1 {
+            if (p2p[i] > trs * 6.0) || p2p[i] > 5.5 {                 // 3.8 2.6
                 flag = true;
             }
             if diff_signs[i] != 0.0 {
@@ -326,9 +373,12 @@ mod proc_ecg {
         }
         (out, mask)
     }
+
     fn del_nouse(ch: &Vec<f32>, mask: &Vec<f32>) -> Vec<f32> {
+        // bhn, ahn = butter(2, 6, 'hp', fs=250)
         let bhn = vec![0.89884553, -1.79769105, 0.89884553];
         let ahn = vec![1.0, -1.78743252, 0.80794959];
+        // bln, aln = butter(6, 25, 'lp', fs=250)
         let bln = vec![0.00034054, 0.00204323, 0.00510806, 0.00681075, 0.00510806, 0.00204323, 0.00034054];
         let aln = vec![1.0, -3.5794348, 5.65866717, -4.96541523, 2.52949491, -0.70527411, 0.08375648];
 
@@ -342,36 +392,65 @@ mod proc_ecg {
             .collect();
         result
     }
-    fn filt_r(ch: &Vec<f32>) -> Vec<f32> {
+
+    pub fn filt_r(ch: &Vec<f32>) -> Vec<f32> {
+        //blr, alr = butter(1, 0.15, 'lp', fs=250)
         let blr = vec![0.00188141, 0.00188141];
         let alr = vec![1.0, -0.99623718];
+        //blr, alr = butter(1, 0.1, 'lp', fs=250)
+        // let blr = vec![0.00125506, 0.00125506];
+        // let alr = vec![1.0, -0.99748988];
+        // bhr, ahr = butter(1, 6.1, 'hp', fs=250)
         let bhr = vec![0.92867294, -0.92867294];
         let ahr = vec![1.0, -0.85734589];
+        //bhr, ahr = butter(1, 5.5, 'hp', fs=250)
+        // let bhr = vec![0.9521018, -0.9521018];
+        // let ahr = vec![1.0, -0.90420359];
+
         let out = my_filtfilt(&blr, &alr, &ch);
         let out = out
             .iter()
-            .map(|&x| x * 1000.0)
+            .map(|&x| x * 2000.0)
             .collect();
         let out = my_filtfilt(&bhr, &ahr, &out);
         out
     }
+
     fn sum_ch(ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>) -> Vec<f32> {
-        let result: Vec<f32> = ch1
-            .iter()
-            .zip(ch2.iter())
-            .zip(ch3.iter())
-            .map(|((&a, &b), &c)| {
-                let sum = a + b + c;
-                if sum > 1.5 {
-                    1.5
-                } else {
-                    sum
-                }
-            })
-            .collect();
-        result
+        let mut sum_ch: Vec<f32> = ch1.to_owned();
+        for i in 0..ch1.len() - 1 {
+            if ((ch1[i] > ch2[i]) && (ch1[i] < ch3[i])) || ((ch1[i] > ch3[i]) && (ch1[i] < ch2[i])) {
+                sum_ch[i] = ch1[i];
+            }
+            if ((ch2[i] > ch1[i]) && (ch2[i] < ch3[i])) || ((ch2[i] > ch3[i]) && (ch2[i] < ch1[i])) {
+                sum_ch[i] = ch2[i];
+            }
+            if ((ch3[i] > ch1[i]) && (ch3[i] < ch2[i])) || ((ch3[i] > ch2[i]) && (ch3[i] < ch1[i])) {
+                sum_ch[i] = ch3[i];
+            }
+        }
+        sum_ch
     }
-    pub fn pre_proc_r(ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>) -> Vec<f32> {
+    // fn sum_ch(ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>) -> Vec<f32> {
+    //     let mut sum_ch: Vec<f32> = ch1
+    //         .iter()
+    //         .zip(ch2.iter())
+    //         .zip(ch3.iter())
+    //         .map(|((&a, &b), &c)| {
+    //             let sum = a + b + c;
+    //             sum
+    //         })
+    //         .collect();
+    //     // let trs = get_trs(&sum_ch) * 0.8;
+    //     // for i in 0..sum_ch.len() {
+    //     //     if sum_ch[i] > trs {
+    //     //         sum_ch[i] = trs + sum_ch[i] * 0.1;
+    //     //     }
+    //     // }
+    //     sum_ch
+    // }
+
+    pub fn pre_proc_r(ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>) {
         let cln_ch1 = clean_ch(&ch1);
         let cln_ch2 = clean_ch(&ch2);
         let cln_ch3 = clean_ch(&ch3);
@@ -380,9 +459,17 @@ mod proc_ecg {
         let p2p_ch2 = get_p2p(&cln_ch2, 40, false);
         let p2p_ch3 = get_p2p(&cln_ch3, 40, false);
 
+        // let p2p_ch1 = del_isoline(&p2p_ch1);
+        // let p2p_ch2 = del_isoline(&p2p_ch2);
+        // let p2p_ch3 = del_isoline(&p2p_ch3);
+
         let art1 = del_artifacts(&cln_ch1, &p2p_ch1);
         let art2 = del_artifacts(&cln_ch2, &p2p_ch2);
         let art3 = del_artifacts(&cln_ch3, &p2p_ch3);
+
+        // let cln_ch1 = clean_ch(&ch1);
+        // let cln_ch2 = clean_ch(&ch2);
+        // let cln_ch3 = clean_ch(&ch3);
 
         let fch1 = del_nouse(&art1.0, &art1.1);
         let fch2 = del_nouse(&art2.0, &art2.1);
@@ -396,9 +483,11 @@ mod proc_ecg {
         let fch2 = filt_r(&fch2);
         let fch3 = filt_r(&fch3);
         let sum_leads = sum_ch(&fch1, &fch2, &fch3);
-        sum_leads
+        // let sum_leads = filt_r(&sum_leads);
+        (sum_leads, fch1, fch2, fch3)
     }
-    fn del_isoline(ch: &Vec<f32>) -> Vec<f32> {
+
+    pub fn del_isoline(ch: &Vec<f32>) -> Vec<f32> {
         // bi, ai = butter(2, 0.6, 'hp', fs=250)
         let bi = vec![0.98939373, -1.97878745, 0.98939373];
         let ai = vec![1.0, -1.97867496, 0.97889995];
@@ -409,72 +498,76 @@ mod proc_ecg {
 
 mod qrs_forms {
     use ndarray::Array1;
+    use crate::proc_ecg::del_isoline;
 
     pub struct FormsQrs {
         pub ref_form1: Vec<f32>,
         pub ref_form2: Vec<f32>,
         pub ref_form3: Vec<f32>,
     }
+
     impl FormsQrs {
-        fn get_ref_forms(&mut self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<u64>) {
-            for i in 1..ind_r.len() - 1 {
-                let start_index = (ind_r[i] - 35) as usize;
-                let end_index = (ind_r[i] + 36) as usize;
-                let qrs1 = &ch1[start_index..end_index].to_vec();
-                let qrs2 = &ch2[start_index..end_index].to_vec();
-                let qrs3 = &ch3[start_index..end_index].to_vec();
-                let start_index = (ind_r[i + 1] - 35) as usize;
-                let end_index = (ind_r[i + 1] + 36) as usize;
-                let qrs11 = &ch1[start_index..end_index].to_vec();
-                let qrs22 = &ch2[start_index..end_index].to_vec();
-                let qrs33 = &ch3[start_index..end_index].to_vec();
+        pub fn get_ref_forms(&mut self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<usize>) {
+            if ind_r.len() > 1 {
+                for i in 0..(ind_r.len() - 1) {
+                    let start_index = (ind_r[i] - 35) as usize;
+                    let end_index = (ind_r[i] + 36) as usize;
+                    let qrs1 = &ch1[start_index..end_index].to_vec();
+                    let qrs2 = &ch2[start_index..end_index].to_vec();
+                    let qrs3 = &ch3[start_index..end_index].to_vec();
+                    let start_index = (ind_r[i + 1] - 35) as usize;
+                    let end_index = (ind_r[i + 1] + 36) as usize;
+                    let qrs11 = &ch1[start_index..end_index].to_vec();
+                    let qrs22 = &ch2[start_index..end_index].to_vec();
+                    let qrs33 = &ch3[start_index..end_index].to_vec();
 
-                let cor1 = get_coef_cor(qrs1, qrs11);
-                let cor2 = get_coef_cor(qrs2, qrs22);
-                let cor3 = get_coef_cor(qrs3, qrs33);
-
-                if cor1 > 0.93 && cor2 > 0.93 && cor3 > 0.93 {
-                    for i in 0..71 {
-                        self.ref_form1[i] = qrs1[i];
-                        self.ref_form2[i] = qrs2[i];
-                        self.ref_form3[i] = qrs3[i];
+                    let cor1 = get_coef_cor(&qrs1, &qrs11);
+                    let cor2 = get_coef_cor(&qrs2, &qrs22);
+                    let cor3 = get_coef_cor(&qrs3, &qrs33);
+                        if cor1 > 0.97 && cor2 > 0.97 && cor3 > 0.97 {
+                        // if cor1 > 0.925 && cor2 > 0.927 && cor3 > 0.926 {
+                        self.ref_form1 = qrs1.to_owned();
+                        self.ref_form2 = qrs2.to_owned();
+                        self.ref_form3 = qrs3.to_owned();
+                        break;
                     }
-                    break;
                 }
             }
         }
     }
-    fn norm_qrs(qrs: &Vec<f32>) -> Vec<f32> {
-        let mut min:f32 = 0.0;
-        let mut max:f32 = 0.0;
+
+    pub fn norm_qrs(qrs: &Vec<f32>) -> Vec<f32> {
+        let mut min: f32 = 0.0;
+        let mut max: f32 = 0.0;
         let mut out = qrs.to_owned();
-        for i in 0..out.len() {
-            if out[i] < min {
-                min = out[i];
-            }
-        }
-        for i in 0..out.len() {
-            out[i] -= min;
-        }
-        for i in 0..out.len() {
-            if out[i] > max {
-                max = out[i];
-            }
-        }
-        if max != 0.0 {
-            for i in 0..out.len() {
-                out[i] /= max;
-            }
-        }
+        // for i in 0..out.len() {
+        //     if out[i] < min {
+        //         min = out[i];
+        //     }
+        // }
+        // for i in 0..out.len() {
+        //     out[i] -= min;
+        // }
+        // for i in 0..out.len() {
+        //     if out[i] > max {
+        //         max = out[i];
+        //     }
+        // }
+        // if max != 0.0 {
+        //     for i in 0..out.len() {
+        //         out[i] /= max;
+        //     }
+        // }
         out
     }
-    fn get_coef_cor(x: &Vec<f32>, y: &Vec<f32>) -> f32 {
-        let norm_x = norm_qrs(x);
-        let norm_y = norm_qrs(y);
-        let arr_x = Array1::from_vec(norm_x.to_vec());
-        let arr_y = Array1::from_vec(norm_y.to_vec());
-        let mean_x: f32 = arr_x.mean().unwrap();
-        let mean_y: f32 = arr_y.mean().unwrap();
+
+    pub fn get_coef_cor(x: &Vec<f32>, y: &Vec<f32>) -> f32 {
+        let norm_x = norm_qrs(&x);
+        let norm_y = norm_qrs(&y);
+        let arr_x = Array1::from_vec(norm_x);
+        let arr_y = Array1::from_vec(norm_y);
+        let mean_x = &arr_x.mean().unwrap();
+        let mean_y = &arr_y.mean().unwrap();
         let arr_xy = &arr_x * &arr_y;
         let mean_xy = Array1::from(arr_xy).mean().unwrap();
         let std_x = &arr_x.std(0.0);
@@ -482,127 +575,89 @@ mod qrs_forms {
         let std_xy = std_x * std_y;
         let mut out: f32 = 0.0;
         if std_xy != 0.0 {
-            out = (&mean_xy - &mean_x * &mean_y) / &std_xy;
+            out = (mean_xy - mean_x * mean_y) / std_xy;
         } else { out = 0.0; }
         out
     }
-
 }
 
+pub mod qrs_types {
+    use crate::proc_ecg::*;
+    use crate::qrs_forms::*;
 
-// struct FormsQrs {
-//     ref_form1: Vec<f32>,
-//     ref_form2: Vec<f32>,
-//     ref_form3: Vec<f32>,
-// }
-//
-// impl FormsQrs {
-//     fn norm_qrs(&mut self, qrs: &Vec<f32>) -> Vec<f32> {
-//         let mut min: f32 = 0.0;
-//         let mut max: f32 = 0.0;
-//         for item in qrs.iter() {
-//             if *item < min {
-//                 min = *item;
-//             }
-//         }
-//         for i in 0..qrs.len() {
-//             &qrs[i] = &qrs[i] - &mut min;
-//             // &qrs[i] -= min;
-//         }
-//         for item in qrs.iter() {
-//             if *item > max {
-//                 max = *item;
-//             }
-//         }
-//         if max != 0.0 {
-//             for i in 0..qrs.len() {
-//                 &qrs[i] = &qrs[i] / &mut max;
-//                 // qrs[i] /= max;
-//             }
-//         }
-//         qrs.to_vec()
-//     }
-//     fn get_coef_cor(&mut self, x: &Vec<f32>, y: &Vec<f32>) -> f32 {
-//         let norm_x = &self.norm_qrs(x);
-//         let norm_y = &self.norm_qrs(y);
-//         let arr_x = Array1::from_vec(norm_x.to_vec());
-//         let arr_y = Array1::from_vec(norm_y.to_vec());
-//         let mean_x: f32 = arr_x.mean().unwrap();
-//         let mean_y: f32 = arr_y.mean().unwrap();
-//         let arr_xy = &arr_x * &arr_y;
-//         let mean_xy = Array1::from(arr_xy).mean().unwrap();
-//         let std_x = &arr_x.std(0.0);
-//         let std_y = &arr_y.std(0.0);
-//         let std_xy = std_x * std_y;
-//         let mut out: f32 = 0.0;
-//         if std_xy != 0.0 {
-//             out = (&mean_xy - &mean_x * &mean_y) / &std_xy;
-//         } else { out = 0.0; }
-//         out
-//     }
-//     fn get_ref_forms(&mut self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<u64>) {
-//         for i in 1..ind_r.len() - 1 {
-//             let start_index = (ind_r[i] - 35) as usize;
-//             let end_index = (ind_r[i] + 36) as usize;
-//             let qrs1 = &mut ch1[start_index..end_index].to_vec();
-//             let qrs2 = &mut ch2[start_index..end_index].to_vec();
-//             let qrs3 = &mut ch3[start_index..end_index].to_vec();
-//             let start_index = (ind_r[i + 1] - 35) as usize;
-//             let end_index = (ind_r[i + 1] + 36) as usize;
-//             let qrs11 = &mut ch1[start_index..end_index].to_vec();
-//             let qrs22 = &mut ch2[start_index..end_index].to_vec();
-//             let qrs33 = &mut ch3[start_index..end_index].to_vec();
-//
-//             let cor1 = self.get_coef_cor(qrs1, qrs11);
-//             let cor2 = self.get_coef_cor(qrs2, qrs22);
-//             let cor3 = self.get_coef_cor(qrs3, qrs33);
-//
-//             if cor1 > 0.93 && cor2 > 0.93 && cor3 > 0.93 {
-//                 for i in 0..71 {
-//                     self.ref_form1[i] = qrs1[i];
-//                     self.ref_form2[i] = qrs2[i];
-//                     self.ref_form3[i] = qrs3[i];
-//                 }
-//                 break;
-//             }
-//         }
-//     }
-//     fn get_ind_zero(&self, ind_forms: &Vec<u64>) -> Vec<u64> {
-//         let mut out = vec![] as Vec<u64>;
-//         for i in 0..ind_forms.len() {
-//             if ind_forms[i] == 0 {
-//                 out.push(i as u64);
-//             }
-//         }
-//         out
-//     }
-//     fn get_rem_ind_r(&self, ind_r: &Vec<u64>, ind_rem: &Vec<u64>) -> Vec<u64> {
-//         let mut out = vec![] as Vec<u64>;
-//         for i in 0..ind_rem.len() {
-//             out.push(ind_r[ind_rem[i] as usize]);
-//         }
-//         out
+    fn get_ind_zero(ind_forms: &Vec<usize>) -> Vec<usize> {
+        let mut out = vec![];
+        for i in 0..ind_forms.len() {
+            if ind_forms[i] == 0 {
+                out.push(i);
+            }
+        }
+        out
+    }
 
+    fn get_rem_ind_r(ind_r: &Vec<usize>, ind_rem: &Vec<usize>) -> Vec<usize> {
+        let mut out = vec![];
+        for i in 1..ind_rem.len() {
+            out.push(ind_r[ind_rem[i] - 1]);
+        }
+        out
+    }
 
-    // fn get_ind_types(&mut self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<u64>) {
-    //     let mut ind_forms:Vec<u64> = vec![0; ind_r.len()];
-    //     for k in 1..100 {
-    //         let ind_rem = self.get_ind_zero(&mut ind_forms);
-    //         let rem_ind_r = self.get_rem_ind_r(&ind_r, &ind_rem);
-    //         let _ = &self.get_ref_forms(&ch1, &ch2, &ch3, &rem_ind_r);
-    //         for i in 0..ind_rem.len() {
-    //             let mut coef_cor1 = vec![0.0; 9];
-    //             let mut coef_cor2 = vec![0.0; 9];
-    //             let mut coef_cor3 = vec![0.0; 9];
-    //             for j in 0..9 {
-    //                 let qrs1 = ch1[ind_r[i] as usize - 35 + j - 4..ind_r[i] as usize + 36 + j - 4].to_vec();
-    //                 // let mut ref_form1 = &self.ref_form1;
-    //                 coef_cor1[j] = self.get_coef_cor(&qrs1, &self.ref_form1);
-    //             }
-    //         }
-    //     }
-    // }
-// }
+    fn max_vec(vec: &Vec<f32>) -> f32 {
+        let mut max_v = 0.0;
+        for v in vec.iter() {
+            if *v > max_v { max_v = *v };
+        }
+        max_v
+    }
+
+    pub fn get_ind_types(ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<usize>) -> Vec<usize> {
+        let mut ind_forms: Vec<usize> = vec![0; ind_r.len()];
+        let mut forms = FormsQrs {
+            ref_form1: vec![0.0; 71],
+            ref_form2: vec![0.0; 71],
+            ref_form3: vec![0.0; 71],
+        };
+        let fch1 = del_isoline(&ch1);
+        let fch2 = del_isoline(&ch2);
+        let fch3 = del_isoline(&ch3);
+
+        for k in 1..100 {
+            let ind_rem = get_ind_zero(&mut ind_forms);
+            let rem_ind_r = get_rem_ind_r(&ind_r, &ind_rem);
+            let _ = forms.get_ref_forms(&ch1, &ch2, &ch3, &rem_ind_r);
+            for i in 0..ind_rem.len() {
+                let mut coef_cor1 = vec![0.0; 21];
+                let mut coef_cor2 = vec![0.0; 21];
+                let mut coef_cor3 = vec![0.0; 21];
+                for j in 0..21 {
+                    let qrs1 = &ch1[ind_r[i] - 35 + j - 10..ind_r[i] + 36 + j - 10].to_vec();
+                    coef_cor1[j] = get_coef_cor(&qrs1, &forms.ref_form1);
+                    let qrs2 = &ch2[ind_r[i] - 35 + j - 10..ind_r[i] + 36 + j - 10].to_vec();
+                    coef_cor2[j] = get_coef_cor(&qrs2, &forms.ref_form2);
+                    let qrs3 = &ch3[ind_r[i] - 35 + j - 10..ind_r[i] + 36 + j - 10].to_vec();
+                    coef_cor3[j] = get_coef_cor(&qrs3, &forms.ref_form3);
+                }
+                let max_cor1 = max_vec(&coef_cor1);
+                let max_cor2 = max_vec(&coef_cor2);
+                let max_cor3 = max_vec(&coef_cor3);
+                let mean_cor = (max_cor1 + max_cor2 + max_cor3) / 3.0;
+                if k == 1 && i < 14 {
+                    // dbg!(i, coef_cor1, coef_cor2, coef_cor3);
+                    dbg!(i, max_cor1, max_cor2, max_cor3, mean_cor);
+                }
+                if max_cor1 > 0.9 || max_cor2 > 0.9 || max_cor3 > 0.9 {
+                // let c = 0.97;
+                // let a = 0.00001;
+                // if max_cor1 > c-a*(k as f32-1.0) || max_cor2 > c-a*(k as f32-1.0) || max_cor3 > c-a*(k as f32-1.0) {
+                // if max_cor1 > 0.923 || max_cor2 > 0.925 || max_cor3 > 0.924 {
+                    ind_forms[ind_rem[i]] = k;
+                }
+            }
+        }
+        ind_forms
+    }
+}
 
 fn main() {
     let mut ecg = ecg_data::Ecg {
@@ -615,51 +670,71 @@ fn main() {
         div_intervals: vec![],
     };
 
-    // let mut file1 = File::create("ch1.bin").expect("Не удалось создать файл");
-    // let mut file2 = File::create("ch2.bin").expect("Не удалось создать файл");
-    // let mut file3 = File::create("ch3.bin").expect("Не удалось создать файл");
-    // let mut filef1 = File::create("fch1.bin").expect("Не удалось создать файл");
-    // let mut filef2 = File::create("fch2.bin").expect("Не удалось создать файл");
-    // let mut filef3 = File::create("fch3.bin").expect("Не удалось создать файл");
+    let mut file1 = File::create("ch1.bin").expect("Не удалось создать файл");
+    let mut file2 = File::create("ch2.bin").expect("Не удалось создать файл");
+    let mut file3 = File::create("ch3.bin").expect("Не удалось создать файл");
+    let mut filef1 = File::create("fch1.bin").expect("Не удалось создать файл");
+    let mut filef2 = File::create("fch2.bin").expect("Не удалось создать файл");
+    let mut filef3 = File::create("fch3.bin").expect("Не удалось создать файл");
+    let mut filef4 = File::create("fch4.bin").expect("Не удалось создать файл");
 
     ecg.read_ecg();
 
-    // let slice1: &[f32] = &ecg.lead1;
-    // let slice2: &[f32] = &ecg.lead2;
-    // let slice3: &[f32] = &ecg.lead3;
-    //
-    // file1
-    //     .write_all(bytemuck::cast_slice(slice1))
-    //     .expect("Не удалось записать в файл");
-    // file2
-    //     .write_all(bytemuck::cast_slice(slice2))
-    //     .expect("Не удалось записать в файл");
-    // file3
-    //     .write_all(bytemuck::cast_slice(slice3))
-    //     .expect("Не удалось записать в файл");
+    ecg.lead1 = clean_ch(&ecg.lead1);
+    ecg.lead2 = clean_ch(&ecg.lead2);
+    ecg.lead3 = clean_ch(&ecg.lead3);
+
+    ecg.lead1 = del_isoline(&ecg.lead1);
+    ecg.lead2 = del_isoline(&ecg.lead2);
+    ecg.lead3 = del_isoline(&ecg.lead3);
+
+    let slice1: &[f32] = &ecg.lead1;
+    let slice2: &[f32] = &ecg.lead2;
+    let slice3: &[f32] = &ecg.lead3;
+
+    file1
+        .write_all(bytemuck::cast_slice(slice1))
+        .expect("Не удалось записать в файл");
+    file2
+        .write_all(bytemuck::cast_slice(slice2))
+        .expect("Не удалось записать в файл");
+    file3
+        .write_all(bytemuck::cast_slice(slice3))
+        .expect("Не удалось записать в файл");
+
+    // ecg.lead1 = clean_ch(&ecg.lead1);
+    // ecg.lead2 = clean_ch(&ecg.lead2);
+    // ecg.lead3 = clean_ch(&ecg.lead3);
+
+    // let p2p3 = get_p2p(&ecg.lead3, 30, true);
+    // let p2p3 = filt_r(&p2p3);
+    // let del_art = del_artifacts(&ecg.lead3, &p2p3);
+
+    let type_forms = qrs_types::get_ind_types(&ecg.lead1, &ecg.lead2, &ecg.lead3, &ecg.ind_r);
+    let mut types = vec![0.0; ecg.lead1.len()];
+    for i in 0..type_forms.len() {
+        types[ecg.ind_r[i]] = type_forms[i] as f32;
+    }
 
     // let sum_leads = proc_ecg::pre_proc_r(&ecg.lead1, &ecg.lead2, &ecg.lead3);
-    // let _ = ecg.get_ind_r(&sum_leads);
-    // let _ = ecg.get_div_intervals();
-
-    // let mut forms = FormsQrs {
-    //     ref_form1: vec![0.0; 71],
-    //     ref_form2: vec![0.0; 71],
-    //     ref_form3: vec![0.0; 71],
-    // };
-
-    // let _ = forms.get_ref_forms(&ecg.lead1, &ecg.lead2, &ecg.lead3, &ecg.ind_r);
-
-    // forms.ref_form1 = forms.norm_qrs(&forms.ref_form1.to_owned());
-    // forms.ref_form2 = forms.norm_qrs(&forms.ref_form2.to_owned());
-    // forms.ref_form3 = forms.norm_qrs(&forms.ref_form3.to_owned());
-
-    // let cor = forms.get_coef_cor(&mut forms.ref_form1.to_owned(), &mut forms.ref_form3.to_owned());
-    // println!("{}", cor);
-
-    // let slicef3: &[f32] = &sum_leads;
-
-    // filef3
-    //     .write_all(bytemuck::cast_slice(slicef3))
+    // let sum_leads= filt_r(&sum_leads);
+    // let slicef1: &[f32] = &sum_leads.1;
+    // let slicef2: &[f32] = &sum_leads.2;
+    // let slicef3: &[f32] = &sum_leads.3;
+    // let slicef4: &[f32] = &sum_leads.0;
+    // let slicef3: &[f32] = &p2p3;
+    let slicef3: &[f32] = &types;
+    // let slicef3: &[usize] = &ecg.ind_r;
+    // filef1
+    //     .write_all(bytemuck::cast_slice(slicef1))
+    //     .expect("Не удалось записать в файл");
+    // filef2
+    //     .write_all(bytemuck::cast_slice(slicef2))
+    //     .expect("Не удалось записать в файл");
+    filef3
+        .write_all(bytemuck::cast_slice(slicef3))
+        .expect("Не удалось записать в файл");
+    // filef4
+    //     .write_all(bytemuck::cast_slice(slicef4))
     //     .expect("Не удалось записать в файл");
 }
