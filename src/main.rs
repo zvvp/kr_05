@@ -40,10 +40,10 @@ mod ecg_data {
             println!("{:?}", fname);
 
             let mut file = File::open(fname).expect("Failed to open file");
-            // let mut buffer = Vec::new();
-            let mut buffer = [0; 900000];
-            // file.read_to_end(&mut buffer).expect("Failed to read file");
-            file.read(&mut buffer[..]).expect("Failed to read file");
+            let mut buffer = Vec::new();
+            // let mut buffer = [0; 1000_000];
+            file.read_to_end(&mut buffer).expect("Failed to read file");
+            // file.read(&mut buffer[..]).expect("Failed to read file");
 
             let ecg: Vec<i16> = buffer[1024..]
                 .chunks(2)
@@ -107,8 +107,14 @@ mod ecg_data {
                     self.ind_r.push(ind_max);
                 }
             }
-            while self.ind_r[0] < 50 {
+            while self.ind_r[0] < 55 {
                 self.ind_r.remove(0);
+            }
+            // dbg!(ch.len());
+            // dbg!(self.ind_r[self.ind_r.len() - 1]);
+            // dbg!(ch.len() - self.ind_r[self.ind_r.len() - 1]);
+            while (ch.len() - self.ind_r[self.ind_r.len() - 1]) < 55 {
+                self.ind_r.remove(self.ind_r.len() - 1);
             }
             if (ch.len() - self.ind_r[self.ind_r.len() - 1]) < 40 {
                 self.ind_r.remove(self.ind_r.len() - 1);
@@ -487,6 +493,25 @@ mod proc_ecg {
         (sum_leads, fch1, fch2, fch3)
     }
 
+    // pub fn del_isoline(ch: &Vec<f32>) -> Vec<f32> {
+    //     let len_win = 120;
+    //     let ind_med = 60;
+    //     let mut out = ch.to_owned();
+    //     let mut isoline = ch.to_owned();
+    //     let mut buff = vec![0.0; len_win];
+    //     for i in 60..isoline.len() - 60 {
+    //         let j = i % len_win;
+    //         buff[j] = out[i];
+    //         let mut sort_buff = buff.to_vec();
+    //         sort_buff.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    //         isoline[i - 60] = sort_buff[60];
+    //     }
+    //     for k in 0..ch.len() {
+    //         out[k] = out[k] - isoline[k];
+    //     }
+    //     out
+    // }
+
     pub fn del_isoline(ch: &Vec<f32>) -> Vec<f32> {
         // bi, ai = butter(2, 0.6, 'hp', fs=250)
         let bi = vec![0.98939373, -1.97878745, 0.98939373];
@@ -499,6 +524,7 @@ mod proc_ecg {
 mod qrs_forms {
     use ndarray::Array1;
     use crate::proc_ecg::del_isoline;
+    use crate::qrs_types::max_vec;
 
     pub struct FormsQrs {
         pub ref_form1: Vec<f32>,
@@ -512,25 +538,50 @@ mod qrs_forms {
                 for i in 0..(ind_r.len() - 1) {
                     let start_index = (ind_r[i] - 35) as usize;
                     let end_index = (ind_r[i] + 36) as usize;
+                    let start_index1 = (ind_r[i + 1] - 35) as usize;
+                    let end_index1 = (ind_r[i + 1] + 36) as usize;
                     let qrs1 = &ch1[start_index..end_index].to_vec();
                     let qrs2 = &ch2[start_index..end_index].to_vec();
                     let qrs3 = &ch3[start_index..end_index].to_vec();
-                    let start_index = (ind_r[i + 1] - 35) as usize;
-                    let end_index = (ind_r[i + 1] + 36) as usize;
-                    let qrs11 = &ch1[start_index..end_index].to_vec();
-                    let qrs22 = &ch2[start_index..end_index].to_vec();
-                    let qrs33 = &ch3[start_index..end_index].to_vec();
 
-                    let cor1 = get_coef_cor(&qrs1, &qrs11);
-                    let cor2 = get_coef_cor(&qrs2, &qrs22);
-                    let cor3 = get_coef_cor(&qrs3, &qrs33);
-                        if cor1 > 0.97 && cor2 > 0.97 && cor3 > 0.97 {
-                        // if cor1 > 0.925 && cor2 > 0.927 && cor3 > 0.926 {
+                    let mut coef_cor1 = vec![0.0; 41];
+                    let mut coef_cor2 = vec![0.0; 41];
+                    let mut coef_cor3 = vec![0.0; 41];
+                    for j in 0..41 {
+                        let qrs11 = &ch1[start_index1 + j - 20..end_index1 + j - 20].to_vec();
+                        coef_cor1[j] = get_coef_cor(&qrs1, &qrs11);
+                        let qrs22 = &ch2[start_index1 + j - 20..end_index1 + j - 20].to_vec();
+                        coef_cor2[j] = get_coef_cor(&qrs2, &qrs22);
+                        let qrs33 = &ch3[start_index1 + j - 20..end_index1 + j - 20].to_vec();
+                        coef_cor3[j] = get_coef_cor(&qrs3, &qrs33);
+                    }
+                    let max_cor1 = max_vec(&coef_cor1);
+                    let max_cor2 = max_vec(&coef_cor2);
+                    let max_cor3 = max_vec(&coef_cor3);
+                    // let mean_cor = (max_cor1 + max_cor2 + max_cor3) / 3.0;
+                    // if mean_cor > 0.75 {
+                    // 0.93
+                    if max_cor1 > 0.9 && max_cor2 > 0.9 && max_cor3 > 0.9 {
                         self.ref_form1 = qrs1.to_owned();
                         self.ref_form2 = qrs2.to_owned();
                         self.ref_form3 = qrs3.to_owned();
                         break;
                     }
+                    // let start_index = (ind_r[i + 1] - 35) as usize;
+                    // let end_index = (ind_r[i + 1] + 36) as usize;
+                    // let qrs11 = &ch1[start_index..end_index].to_vec();
+                    // let qrs22 = &ch2[start_index..end_index].to_vec();
+                    // let qrs33 = &ch3[start_index..end_index].to_vec();
+                    //
+                    // let cor1 = get_coef_cor(&qrs1, &qrs11);
+                    // let cor2 = get_coef_cor(&qrs2, &qrs22);
+                    // let cor3 = get_coef_cor(&qrs3, &qrs33);
+                    // if cor1 > 0.97 && cor2 > 0.97 && cor3 > 0.97 {
+                    //     // if cor1 > 0.925 && cor2 > 0.927 && cor3 > 0.926 {
+                    //     self.ref_form1 = qrs1.to_owned();
+                    //     self.ref_form2 = qrs2.to_owned();
+                    //     self.ref_form3 = qrs3.to_owned();
+                    //     break;
                 }
             }
         }
@@ -540,24 +591,24 @@ mod qrs_forms {
         let mut min: f32 = 0.0;
         let mut max: f32 = 0.0;
         let mut out = qrs.to_owned();
-        // for i in 0..out.len() {
-        //     if out[i] < min {
-        //         min = out[i];
-        //     }
-        // }
-        // for i in 0..out.len() {
-        //     out[i] -= min;
-        // }
-        // for i in 0..out.len() {
-        //     if out[i] > max {
-        //         max = out[i];
-        //     }
-        // }
-        // if max != 0.0 {
-        //     for i in 0..out.len() {
-        //         out[i] /= max;
-        //     }
-        // }
+        for i in 0..out.len() {
+            if out[i] < min {
+                min = out[i];
+            }
+        }
+        for i in 0..out.len() {
+            out[i] -= min;
+        }
+        for i in 0..out.len() {
+            if out[i] > max {
+                max = out[i];
+            }
+        }
+        if max != 0.0 {
+            for i in 0..out.len() {
+                out[i] /= max;
+            }
+        }
         out
     }
 
@@ -579,6 +630,17 @@ mod qrs_forms {
         } else { out = 0.0; }
         out
     }
+
+    pub fn median_cor(cor1: f32, cor2: f32, cor3: f32) -> f32 {
+        let mut vec_cor = vec![cor1, cor2, cor3];
+        vec_cor.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        vec_cor[1]
+    }
+    pub fn max_cor(cor1: f32, cor2: f32, cor3: f32) -> f32 {
+        let mut vec_cor = vec![cor1, cor2, cor3];
+        vec_cor.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        vec_cor[2]
+    }
 }
 
 pub mod qrs_types {
@@ -597,13 +659,13 @@ pub mod qrs_types {
 
     fn get_rem_ind_r(ind_r: &Vec<usize>, ind_rem: &Vec<usize>) -> Vec<usize> {
         let mut out = vec![];
-        for i in 1..ind_rem.len() {
-            out.push(ind_r[ind_rem[i] - 1]);
+        for i in 0..ind_rem.len() {
+            out.push(ind_r[ind_rem[i]]);
         }
         out
     }
 
-    fn max_vec(vec: &Vec<f32>) -> f32 {
+    pub fn max_vec(vec: &Vec<f32>) -> f32 {
         let mut max_v = 0.0;
         for v in vec.iter() {
             if *v > max_v { max_v = *v };
@@ -612,47 +674,58 @@ pub mod qrs_types {
     }
 
     pub fn get_ind_types(ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<usize>) -> Vec<usize> {
+        // dbg!(&ind_r[722..735]);
         let mut ind_forms: Vec<usize> = vec![0; ind_r.len()];
         let mut forms = FormsQrs {
             ref_form1: vec![0.0; 71],
             ref_form2: vec![0.0; 71],
             ref_form3: vec![0.0; 71],
         };
-        let fch1 = del_isoline(&ch1);
-        let fch2 = del_isoline(&ch2);
-        let fch3 = del_isoline(&ch3);
+        let fch1 = clean_ch(&ch1);
+        let fch2 = clean_ch(&ch2);
+        let fch3 = clean_ch(&ch3);
 
-        for k in 1..100 {
+        let fch1 = del_isoline(&fch1);
+        let fch2 = del_isoline(&fch2);
+        let fch3 = del_isoline(&fch3);
+
+        for k in 1..10{
             let ind_rem = get_ind_zero(&mut ind_forms);
             let rem_ind_r = get_rem_ind_r(&ind_r, &ind_rem);
-            let _ = forms.get_ref_forms(&ch1, &ch2, &ch3, &rem_ind_r);
+            let _ = forms.get_ref_forms(&fch1, &fch2, &fch3, &rem_ind_r);
             for i in 0..ind_rem.len() {
-                let mut coef_cor1 = vec![0.0; 21];
-                let mut coef_cor2 = vec![0.0; 21];
-                let mut coef_cor3 = vec![0.0; 21];
-                for j in 0..21 {
-                    let qrs1 = &ch1[ind_r[i] - 35 + j - 10..ind_r[i] + 36 + j - 10].to_vec();
+                let mut coef_cor1 = vec![0.0; 41];
+                let mut coef_cor2 = vec![0.0; 41];
+                let mut coef_cor3 = vec![0.0; 41];
+                for j in 0..41 {
+                    let qrs1 = &fch1[ind_r[ind_rem[i]] - 35 + j - 20..ind_r[ind_rem[i]] + 36 + j - 20].to_vec();
                     coef_cor1[j] = get_coef_cor(&qrs1, &forms.ref_form1);
-                    let qrs2 = &ch2[ind_r[i] - 35 + j - 10..ind_r[i] + 36 + j - 10].to_vec();
+                    let qrs2 = &fch2[ind_r[ind_rem[i]] - 35 + j - 20..ind_r[ind_rem[i]] + 36 + j - 20].to_vec();
                     coef_cor2[j] = get_coef_cor(&qrs2, &forms.ref_form2);
-                    let qrs3 = &ch3[ind_r[i] - 35 + j - 10..ind_r[i] + 36 + j - 10].to_vec();
+                    let qrs3 = &fch3[ind_r[ind_rem[i]] - 35 + j - 20..ind_r[ind_rem[i]] + 36 + j - 20].to_vec();
                     coef_cor3[j] = get_coef_cor(&qrs3, &forms.ref_form3);
                 }
                 let max_cor1 = max_vec(&coef_cor1);
                 let max_cor2 = max_vec(&coef_cor2);
                 let max_cor3 = max_vec(&coef_cor3);
-                let mean_cor = (max_cor1 + max_cor2 + max_cor3) / 3.0;
-                if k == 1 && i < 14 {
-                    // dbg!(i, coef_cor1, coef_cor2, coef_cor3);
-                    dbg!(i, max_cor1, max_cor2, max_cor3, mean_cor);
+                let median_cor = median_cor(max_cor1, max_cor2, max_cor3);
+                let max_cor = max_cor(max_cor1, max_cor2, max_cor3);
+                let mean_cor = (max_cor + median_cor) / 2.0;
+                // let mean_cor = (max_cor1 + max_cor2 + max_cor3 + median_cor) / 4.0;
+                // if k == 1 && ind_rem[i] < 12 {
+                if k == 1 && rem_ind_r[i] == 18749 {
+                    dbg!(ind_rem[i], rem_ind_r[i], max_cor1, max_cor2, max_cor3, max_cor, mean_cor);
                 }
-                if max_cor1 > 0.9 || max_cor2 > 0.9 || max_cor3 > 0.9 {
-                // let c = 0.97;
-                // let a = 0.00001;
-                // if max_cor1 > c-a*(k as f32-1.0) || max_cor2 > c-a*(k as f32-1.0) || max_cor3 > c-a*(k as f32-1.0) {
-                // if max_cor1 > 0.923 || max_cor2 > 0.925 || max_cor3 > 0.924 {
+                if max_cor1 > 0.937 || max_cor2 > 0.937 || max_cor3 > 0.937 {
+                    ind_forms[ind_rem[i]] = k;
+                // } else if max_cor1 > 0.87 && max_cor2 > 0.87 && max_cor3 > 0.87 {
+                //     ind_forms[ind_rem[i]] = k;
+                // } else if median_cor > 0.92 {
+                //     ind_forms[ind_rem[i]] = k;
+                } else if mean_cor > 0.85 {
                     ind_forms[ind_rem[i]] = k;
                 }
+                // ind_forms[ind_rem[i]] = k;
             }
         }
         ind_forms
@@ -680,13 +753,13 @@ fn main() {
 
     ecg.read_ecg();
 
-    ecg.lead1 = clean_ch(&ecg.lead1);
-    ecg.lead2 = clean_ch(&ecg.lead2);
-    ecg.lead3 = clean_ch(&ecg.lead3);
+    // ecg.lead1 = clean_ch(&ecg.lead1);
+    // ecg.lead2 = clean_ch(&ecg.lead2);
+    // ecg.lead3 = clean_ch(&ecg.lead3);
 
-    ecg.lead1 = del_isoline(&ecg.lead1);
-    ecg.lead2 = del_isoline(&ecg.lead2);
-    ecg.lead3 = del_isoline(&ecg.lead3);
+    // ecg.lead1 = del_isoline(&ecg.lead1);
+    // ecg.lead2 = del_isoline(&ecg.lead2);
+    // ecg.lead3 = del_isoline(&ecg.lead3);
 
     let slice1: &[f32] = &ecg.lead1;
     let slice2: &[f32] = &ecg.lead2;
