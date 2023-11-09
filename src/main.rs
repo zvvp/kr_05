@@ -40,10 +40,10 @@ mod ecg_data {
             println!("{:?}", fname);
 
             let mut file = File::open(fname).expect("Failed to open file");
-            let mut buffer = Vec::new();
-            // let mut buffer = [0; 1000_000];
-            file.read_to_end(&mut buffer).expect("Failed to read file");
-            // file.read(&mut buffer[..]).expect("Failed to read file");
+            // let mut buffer = Vec::new();
+            let mut buffer = [0; 1000_000];
+            // file.read_to_end(&mut buffer).expect("Failed to read file");
+            file.read(&mut buffer[..]).expect("Failed to read file");
 
             let ecg: Vec<i16> = buffer[1024..]
                 .chunks(2)
@@ -493,32 +493,32 @@ mod proc_ecg {
         (sum_leads, fch1, fch2, fch3)
     }
 
-    // pub fn del_isoline(ch: &Vec<f32>) -> Vec<f32> {
-    //     let len_win = 120;
-    //     let ind_med = 60;
-    //     let mut out = ch.to_owned();
-    //     let mut isoline = ch.to_owned();
-    //     let mut buff = vec![0.0; len_win];
-    //     for i in 60..isoline.len() - 60 {
-    //         let j = i % len_win;
-    //         buff[j] = out[i];
-    //         let mut sort_buff = buff.to_vec();
-    //         sort_buff.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    //         isoline[i - 60] = sort_buff[60];
-    //     }
-    //     for k in 0..ch.len() {
-    //         out[k] = out[k] - isoline[k];
-    //     }
-    //     out
-    // }
-
     pub fn del_isoline(ch: &Vec<f32>) -> Vec<f32> {
-        // bi, ai = butter(2, 0.6, 'hp', fs=250)
-        let bi = vec![0.98939373, -1.97878745, 0.98939373];
-        let ai = vec![1.0, -1.97867496, 0.97889995];
-        let out = my_filtfilt(&bi, &ai, &ch);
+        let len_win = 120;
+        let ind_med = 60;
+        let mut out = ch.to_owned();
+        let mut isoline = ch.to_owned();
+        let mut buff = vec![0.0; len_win];
+        for i in (60..isoline.len() - 60) {
+            let j = i % len_win;
+            buff[j] = out[i];
+            let mut sort_buff = buff.to_vec();
+            sort_buff.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            isoline[i - 60] = sort_buff[60];
+        }
+        for k in 0..ch.len() {
+            out[k] = out[k] - isoline[k];
+        }
         out
     }
+
+    // pub fn del_isoline(ch: &Vec<f32>) -> Vec<f32> {
+    //     // bi, ai = butter(2, 0.6, 'hp', fs=250)
+    //     let bi = vec![0.98939373, -1.97878745, 0.98939373];
+    //     let ai = vec![1.0, -1.97867496, 0.97889995];
+    //     let out = my_filtfilt(&bi, &ai, &ch);
+    //     out
+    // }
 }
 
 mod qrs_forms {
@@ -689,7 +689,7 @@ pub mod qrs_types {
         let fch2 = del_isoline(&fch2);
         let fch3 = del_isoline(&fch3);
 
-        for k in 1..10{
+        for k in 1..100{
             let ind_rem = get_ind_zero(&mut ind_forms);
             let rem_ind_r = get_rem_ind_r(&ind_r, &ind_rem);
             let _ = forms.get_ref_forms(&fch1, &fch2, &fch3, &rem_ind_r);
@@ -710,20 +710,24 @@ pub mod qrs_types {
                 let max_cor3 = max_vec(&coef_cor3);
                 let median_cor = median_cor(max_cor1, max_cor2, max_cor3);
                 let max_cor = max_cor(max_cor1, max_cor2, max_cor3);
-                let mean_cor = (max_cor + median_cor) / 2.0;
-                // let mean_cor = (max_cor1 + max_cor2 + max_cor3 + median_cor) / 4.0;
-                // if k == 1 && ind_rem[i] < 12 {
-                if k == 1 && rem_ind_r[i] == 18749 {
-                    dbg!(ind_rem[i], rem_ind_r[i], max_cor1, max_cor2, max_cor3, max_cor, mean_cor);
-                }
-                if max_cor1 > 0.937 || max_cor2 > 0.937 || max_cor3 > 0.937 {
+                // let mean_cor = (max_cor + median_cor) / 2.0;
+                let mean_cor = (max_cor1 + max_cor2 + max_cor3 + max_cor) / 4.0;
+                // if k == 1 && ind_rem[i] == 140 {
+                // if k == 1 && rem_ind_r[i] == 18614 {
+                //     dbg!(ind_rem[i], rem_ind_r[i], max_cor1, max_cor2, max_cor3, max_cor, mean_cor);
+                // }
+                if max_cor1 > 0.96 || max_cor2 > 0.96 || max_cor3 > 0.96 {
                     ind_forms[ind_rem[i]] = k;
-                // } else if max_cor1 > 0.87 && max_cor2 > 0.87 && max_cor3 > 0.87 {
-                //     ind_forms[ind_rem[i]] = k;
-                // } else if median_cor > 0.92 {
-                //     ind_forms[ind_rem[i]] = k;
-                } else if mean_cor > 0.85 {
+                    // println!("1");
+                } else if max_cor1 > 0.84 && max_cor2 > 0.84 && max_cor3 > 0.84 {
                     ind_forms[ind_rem[i]] = k;
+                    // println!("2");
+                } else if median_cor > 0.92 {
+                    ind_forms[ind_rem[i]] = k;
+                    // println!("3");
+                } else if mean_cor > 0.88 {
+                    ind_forms[ind_rem[i]] = k;
+                    // println!("4");
                 }
                 // ind_forms[ind_rem[i]] = k;
             }
