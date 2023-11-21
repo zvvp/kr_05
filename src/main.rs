@@ -151,7 +151,8 @@ mod proc_ecg {
         let sum: f32 = abs_diff.iter().sum();
         let mean_diff = sum / abs_diff.len() as f32;
         let trs: f32 = get_trs(&abs_diff);
-        // dbg!(trs / mean_diff);
+        // let mdch = get_mean_diff(&ch);
+        // dbg!(trs, mdch);
         for i in (3..lench - 5).step_by(1) {
             let j = i % 11;
             win[j] = ch[i];
@@ -338,7 +339,24 @@ mod proc_ecg {
         let diff_ch: Vec<f32> = ch_copy.iter().zip(ch_copy1.iter()).map(|(val1, val2)| val1 - val2).collect();
         diff_ch
     }
-
+    pub fn get_mean_diff(ch: &Vec<f32>) -> f32 {
+        let d_ch = my_diff(&ch);
+        let abs_d_ch: Vec<f32> = d_ch.iter().map(|val| val.abs()).collect();
+        let sum_d_ch: f32 = abs_d_ch.iter().sum();
+        let mean_d_ch = sum_d_ch / d_ch.len() as f32;
+        let (count, sum): (usize, f32) = abs_d_ch
+            .iter()
+            .filter(|&x| *x > mean_d_ch)
+            .fold((0, 0.0), |(count, sum), &x| (count + 1, sum + x));
+        let mean_d_ch1 = sum / count as f32;
+        let (count, sum): (usize, f32) = abs_d_ch
+            .iter()
+            .filter(|&x| *x > mean_d_ch1)
+            .fold((0, 0.0), |(count, sum), &x| (count + 1, sum + x));
+        let mean_d_ch2 = sum / count as f32;
+        let out = mean_d_ch + mean_d_ch1 + mean_d_ch2;
+        out
+    }
     pub fn get_trs(p2p: &Vec<f32>) -> f32 {
         let sum_p2p: f32 = p2p
             .iter()
@@ -529,7 +547,7 @@ mod proc_ecg {
 
 mod qrs_forms {
     use ndarray::Array1;
-    use crate::proc_ecg::del_isoline;
+    // use crate::proc_ecg::del_isoline;
     use crate::qrs_types::max_vec;
 
     pub struct FormsQrs {
@@ -725,10 +743,10 @@ pub mod qrs_types {
                 let max_cor = max_cor(max_cor1, max_cor2, max_cor3);
                 // let mean_cor = (max_cor + median_cor) / 2.0;
                 // let mean_cor = (max_cor1 + max_cor2 + max_cor3 + max_cor) / 4.0;
-                if k == 1 && ind_rem[i] < 4 {
+                // if k == 1 && ind_rem[i] < 4 {
                     // if k == 1 && rem_ind_r[i] == 64910 {
-                    dbg!(ind_rem[i], rem_ind_r[i], max_cor1, max_cor2, max_cor3, max_cor, median_cor);
-                }
+                    // dbg!(ind_rem[i], rem_ind_r[i], max_cor1, max_cor2, max_cor3, max_cor, median_cor);
+                // }
                 if max_cor1 > 0.955 || max_cor2 > 0.955 || max_cor3 > 0.955 {
                     ind_forms[ind_rem[i]] = k;
                     // println!("1");
