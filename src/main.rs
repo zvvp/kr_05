@@ -2,10 +2,10 @@ use bytemuck;
 use std::fs::File;
 use std::io::Read;
 use std::io::Write;
+use std::time::Instant;
 use ndarray::prelude::*;
-use ndarray::Array1;
 use ndarray_stats::*;
-use crate::proc_ecg::{clean_ch, del_artifacts, del_isoline, filt_r, get_p2p};
+
 
 mod ecg_data {
     // use bytemuck;
@@ -148,17 +148,19 @@ mod proc_ecg {
         let lench = ch.len();
         let diff_ch = my_diff(&ch);
         let abs_diff: Vec<f32> = diff_ch.iter().map(|&x| x.abs()).collect();
+        let sum: f32 = abs_diff.iter().sum();
+        let mean_diff = sum / abs_diff.len() as f32;
         let trs: f32 = get_trs(&abs_diff);
-        // dbg!(trs * 6.0);
-
+        // dbg!(trs / mean_diff);
         for i in (3..lench - 5).step_by(1) {
             let j = i % 11;
             win[j] = ch[i];
             let d1 = ch[i - 1] - ch[i - 2];
             let d2 = ch[i] - ch[i - 1];
+            // if i < 100 {dbg!(d2);}
             let d3 = ch[i + 1] - ch[i];
-            if abs_diff[i] > trs * 9.0 { // 2.00
-            // if (ch[i] - out[i - 1]).abs() > trs * 7.0 { // 2.00
+            if abs_diff[i] > trs / mean_diff * 0.45 { // 2.00
+                // if (ch[i] - out[i - 1]).abs() > trs * 7.0 { // 2.00
                 let mut sort_win = win.to_vec();
                 sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 out[i - 2] = sort_win[5];
@@ -172,7 +174,7 @@ mod proc_ecg {
             }
             // dbg!(d2.abs() + d3.abs());
             // dbg!(trs*0.5);
-            if (d1.signum() != d2.signum()) && (d2.signum() != d3.signum()) && ((d1.abs() + d2.abs() + d3.abs()) > trs * 100.0) {  // 2.0
+            if (d1.signum() != d2.signum()) && (d2.signum() != d3.signum()) && ((d1.abs() + d2.abs() + d3.abs()) > trs / mean_diff  * 1.2) {  // 2.0
                 let mut sort_win = win.to_vec();
                 sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 out[i - 2] = sort_win[5];
@@ -265,7 +267,7 @@ mod proc_ecg {
         // let b = vec![0.0186504, 0.03730079, 0.0186504];
         // let a = vec![1.0, -1.57823618, 0.65283776];
         let ch_del_ks = cut_impuls(&ch);
-        let ch_del_ks = cut_impuls(&ch_del_ks);
+        // let ch_del_ks = cut_impuls(&ch_del_ks);
         let mut fch = ch_del_ks.clone();
 
         let spec24 = get_spec24(&ch_del_ks);
@@ -291,7 +293,7 @@ mod proc_ecg {
             let mut p2pw = &win_max - &win_min;
             if sqr {
                 p2pw = &p2pw * &p2pw;
-                // if p2pw > 2.0 {p2pw = 2.0};
+                // if p2pw > 2.0 {p2pw = 2.0 + p2pw * 0.2};
             }
             p2p[i + half_win - 2] = p2pw;
             p2p[i + half_win - 1] = p2pw;
@@ -305,8 +307,8 @@ mod proc_ecg {
             if trs > 0.0 {
                 for i in 0..p2p.len() {
                     p2p[i] /= trs;
-                    // if p2p[i] > 1.5 {p2p[i] = 1.0;}
-                    if p2p[i] > trs * 1.5 { p2p[i] = trs * 1.5 + 0.1 * p2p[i]; }
+                    if p2p[i] > 0.5 { p2p[i] = 0.5 + p2p[i] * 0.1; }
+                    // if p2p[i] > trs * 1.5 { p2p[i] = trs * 1.5 + 0.2 * p2p[i]; }
                 }
             }
         }
@@ -473,13 +475,13 @@ mod proc_ecg {
         let art2 = del_artifacts(&cln_ch2, &p2p_ch2);
         let art3 = del_artifacts(&cln_ch3, &p2p_ch3);
 
-        // let cln_ch1 = clean_ch(&ch1);
-        // let cln_ch2 = clean_ch(&ch2);
-        // let cln_ch3 = clean_ch(&ch3);
+        let cln_ch1 = del_isoline(&art1.0);
+        let cln_ch2 = del_isoline(&art2.0);
+        let cln_ch3 = del_isoline(&art3.0);
 
-        let fch1 = del_nouse(&art1.0, &art1.1);
-        let fch2 = del_nouse(&art2.0, &art2.1);
-        let fch3 = del_nouse(&art3.0, &art3.1);
+        let fch1 = del_nouse(&cln_ch1, &art1.1);
+        let fch2 = del_nouse(&cln_ch2, &art2.1);
+        let fch3 = del_nouse(&cln_ch3, &art3.1);
 
         let fch1 = get_p2p(&fch1, 30, true);
         let fch2 = get_p2p(&fch2, 30, true);
@@ -490,24 +492,28 @@ mod proc_ecg {
         let fch3 = filt_r(&fch3);
         let sum_leads = sum_ch(&fch1, &fch2, &fch3);
         // let sum_leads = filt_r(&sum_leads);
+        // (sum_leads, cln_ch1, cln_ch2, cln_ch3)
         (sum_leads, fch1, fch2, fch3)
     }
 
     pub fn del_isoline(ch: &Vec<f32>) -> Vec<f32> {
         let len_win = 120;
-        let ind_med = 60;
+        // let ind_med = 60;
         let mut out = ch.to_owned();
         let mut isoline = ch.to_owned();
         let mut buff = vec![0.0; len_win];
-        for i in (60..isoline.len() - 60) {
+        for i in 63..isoline.len() {
             let j = i % len_win;
-            buff[j] = out[i];
-            let mut sort_buff = buff.to_vec();
+            buff[j] = ch[i];
+            let mut sort_buff: Vec<_> = buff.to_vec().iter().step_by(7).cloned().collect();
             sort_buff.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            isoline[i - 60] = sort_buff[60];
-        }
-        for k in 0..ch.len() {
-            out[k] = out[k] - isoline[k];
+            out[i - 60 - 3] = ch[i - 60 - 3] - sort_buff[8];
+            out[i - 60 - 2] = ch[i - 60 - 2] - sort_buff[8];
+            out[i - 60 - 1] = ch[i - 60 - 1] - sort_buff[8];
+            out[i - 60] = ch[i - 60] - sort_buff[8];
+            out[i - 60 + 1] = ch[i - 60 + 1] - sort_buff[8];
+            out[i - 60 + 2] = ch[i - 60 + 2] - sort_buff[8];
+            out[i - 60 + 3] = ch[i - 60 + 3] - sort_buff[8];
         }
         out
     }
@@ -536,10 +542,10 @@ mod qrs_forms {
         pub fn get_ref_forms(&mut self, ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<usize>) {
             if ind_r.len() > 1 {
                 for i in 0..(ind_r.len() - 1) {
-                    let start_index = (ind_r[i] - 35) as usize;
-                    let end_index = (ind_r[i] + 36) as usize;
-                    let start_index1 = (ind_r[i + 1] - 35) as usize;
-                    let end_index1 = (ind_r[i + 1] + 36) as usize;
+                    let start_index = (ind_r[i] - 25) as usize;
+                    let end_index = (ind_r[i] + 26) as usize;
+                    let start_index1 = (ind_r[i + 1] - 25) as usize;
+                    let end_index1 = (ind_r[i + 1] + 26) as usize;
                     let qrs1 = &ch1[start_index..end_index].to_vec();
                     let qrs2 = &ch2[start_index..end_index].to_vec();
                     let qrs3 = &ch3[start_index..end_index].to_vec();
@@ -561,7 +567,7 @@ mod qrs_forms {
                     // let mean_cor = (max_cor1 + max_cor2 + max_cor3) / 3.0;
                     // if mean_cor > 0.75 {
                     // 0.93
-                    if max_cor1 > 0.9 && max_cor2 > 0.9 && max_cor3 > 0.9 {
+                    if max_cor1 > 0.93 && max_cor2 > 0.93 && max_cor3 > 0.93 {
                         self.ref_form1 = qrs1.to_owned();
                         self.ref_form2 = qrs2.to_owned();
                         self.ref_form3 = qrs3.to_owned();
@@ -636,6 +642,7 @@ mod qrs_forms {
         vec_cor.sort_by(|a, b| a.partial_cmp(b).unwrap());
         vec_cor[1]
     }
+
     pub fn max_cor(cor1: f32, cor2: f32, cor3: f32) -> f32 {
         let mut vec_cor = vec![cor1, cor2, cor3];
         vec_cor.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -674,12 +681,11 @@ pub mod qrs_types {
     }
 
     pub fn get_ind_types(ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<usize>) -> Vec<usize> {
-        // dbg!(&ind_r[722..735]);
         let mut ind_forms: Vec<usize> = vec![0; ind_r.len()];
         let mut forms = FormsQrs {
-            ref_form1: vec![0.0; 71],
-            ref_form2: vec![0.0; 71],
-            ref_form3: vec![0.0; 71],
+            ref_form1: vec![0.0; 51],
+            ref_form2: vec![0.0; 51],
+            ref_form3: vec![0.0; 51],
         };
         let fch1 = clean_ch(&ch1);
         let fch2 = clean_ch(&ch2);
@@ -689,20 +695,27 @@ pub mod qrs_types {
         let fch2 = del_isoline(&fch2);
         let fch3 = del_isoline(&fch3);
 
-        for k in 1..100{
+        let mut ind_rem_size = 0;
+        for k in 1..50 {
             let ind_rem = get_ind_zero(&mut ind_forms);
+            // dbg!(ind_rem_size, ind_rem.len());
+            // if ind_rem_size - ind_rem.len() < 10 {
+            //     break;
+            // }
+            ind_rem_size = ind_rem.len();
             let rem_ind_r = get_rem_ind_r(&ind_r, &ind_rem);
             let _ = forms.get_ref_forms(&fch1, &fch2, &fch3, &rem_ind_r);
+
             for i in 0..ind_rem.len() {
                 let mut coef_cor1 = vec![0.0; 41];
                 let mut coef_cor2 = vec![0.0; 41];
                 let mut coef_cor3 = vec![0.0; 41];
                 for j in 0..41 {
-                    let qrs1 = &fch1[ind_r[ind_rem[i]] - 35 + j - 20..ind_r[ind_rem[i]] + 36 + j - 20].to_vec();
+                    let qrs1 = &fch1[ind_r[ind_rem[i]] - 25 + j - 20..ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
                     coef_cor1[j] = get_coef_cor(&qrs1, &forms.ref_form1);
-                    let qrs2 = &fch2[ind_r[ind_rem[i]] - 35 + j - 20..ind_r[ind_rem[i]] + 36 + j - 20].to_vec();
+                    let qrs2 = &fch2[ind_r[ind_rem[i]] - 25 + j - 20..ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
                     coef_cor2[j] = get_coef_cor(&qrs2, &forms.ref_form2);
-                    let qrs3 = &fch3[ind_r[ind_rem[i]] - 35 + j - 20..ind_r[ind_rem[i]] + 36 + j - 20].to_vec();
+                    let qrs3 = &fch3[ind_r[ind_rem[i]] - 25 + j - 20..ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
                     coef_cor3[j] = get_coef_cor(&qrs3, &forms.ref_form3);
                 }
                 let max_cor1 = max_vec(&coef_cor1);
@@ -711,22 +724,22 @@ pub mod qrs_types {
                 let median_cor = median_cor(max_cor1, max_cor2, max_cor3);
                 let max_cor = max_cor(max_cor1, max_cor2, max_cor3);
                 // let mean_cor = (max_cor + median_cor) / 2.0;
-                let mean_cor = (max_cor1 + max_cor2 + max_cor3 + max_cor) / 4.0;
-                // if k == 1 && ind_rem[i] == 140 {
-                // if k == 1 && rem_ind_r[i] == 18614 {
-                //     dbg!(ind_rem[i], rem_ind_r[i], max_cor1, max_cor2, max_cor3, max_cor, mean_cor);
-                // }
-                if max_cor1 > 0.96 || max_cor2 > 0.96 || max_cor3 > 0.96 {
+                // let mean_cor = (max_cor1 + max_cor2 + max_cor3 + max_cor) / 4.0;
+                if k == 1 && ind_rem[i] < 4 {
+                    // if k == 1 && rem_ind_r[i] == 64910 {
+                    dbg!(ind_rem[i], rem_ind_r[i], max_cor1, max_cor2, max_cor3, max_cor, median_cor);
+                }
+                if max_cor1 > 0.955 || max_cor2 > 0.955 || max_cor3 > 0.955 {
                     ind_forms[ind_rem[i]] = k;
                     // println!("1");
                 } else if max_cor1 > 0.84 && max_cor2 > 0.84 && max_cor3 > 0.84 {
                     ind_forms[ind_rem[i]] = k;
                     // println!("2");
-                } else if median_cor > 0.92 {
-                    ind_forms[ind_rem[i]] = k;
+                // } else if median_cor > 0.91 {
+                //     ind_forms[ind_rem[i]] = k;
                     // println!("3");
-                } else if mean_cor > 0.88 {
-                    ind_forms[ind_rem[i]] = k;
+                    // } else if mean_cor > 0.88 {
+                    //     ind_forms[ind_rem[i]] = k;
                     // println!("4");
                 }
                 // ind_forms[ind_rem[i]] = k;
@@ -757,13 +770,16 @@ fn main() {
 
     ecg.read_ecg();
 
-    // ecg.lead1 = clean_ch(&ecg.lead1);
-    // ecg.lead2 = clean_ch(&ecg.lead2);
-    // ecg.lead3 = clean_ch(&ecg.lead3);
+    // let start = Instant::now();
+    // ecg.lead1 = proc_ecg::del_isoline(&ecg.lead1);
+    // ecg.lead2 = proc_ecg::del_isoline(&ecg.lead2);
+    // ecg.lead3 = proc_ecg::del_isoline(&ecg.lead3);
+    // let stop = start.elapsed();
+    // println!("Время выполнения: {} s", stop.as_secs());
 
-    // ecg.lead1 = del_isoline(&ecg.lead1);
-    // ecg.lead2 = del_isoline(&ecg.lead2);
-    // ecg.lead3 = del_isoline(&ecg.lead3);
+    ecg.lead1 = proc_ecg::clean_ch(&ecg.lead1);
+    ecg.lead2 = proc_ecg::clean_ch(&ecg.lead2);
+    ecg.lead3 = proc_ecg::clean_ch(&ecg.lead3);
 
     let slice1: &[f32] = &ecg.lead1;
     let slice2: &[f32] = &ecg.lead2;
@@ -786,18 +802,20 @@ fn main() {
     // let p2p3 = get_p2p(&ecg.lead3, 30, true);
     // let p2p3 = filt_r(&p2p3);
     // let del_art = del_artifacts(&ecg.lead3, &p2p3);
-
+    let start = Instant::now();
     let type_forms = qrs_types::get_ind_types(&ecg.lead1, &ecg.lead2, &ecg.lead3, &ecg.ind_r);
+    let stop = start.elapsed();
+    println!("Время выполнения: {} s", stop.as_secs());
     let mut types = vec![0.0; ecg.lead1.len()];
     for i in 0..type_forms.len() {
         types[ecg.ind_r[i]] = type_forms[i] as f32;
     }
 
     // let sum_leads = proc_ecg::pre_proc_r(&ecg.lead1, &ecg.lead2, &ecg.lead3);
-    // let sum_leads= filt_r(&sum_leads);
+    // let sum_leads= proc_ecg::filt_r(&sum_leads.0);
     // let slicef1: &[f32] = &sum_leads.1;
     // let slicef2: &[f32] = &sum_leads.2;
-    // let slicef3: &[f32] = &sum_leads.3;
+    // let slicef3: &[f32] = &sum_leads;
     // let slicef4: &[f32] = &sum_leads.0;
     // let slicef3: &[f32] = &p2p3;
     let slicef3: &[f32] = &types;
