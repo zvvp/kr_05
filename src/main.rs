@@ -40,12 +40,12 @@ mod ecg_data {
             println!("{:?}", fname);
 
             let mut file = File::open(fname).expect("Failed to open file");
-            // let mut buffer = Vec::new();
-            let mut buffer = [0; 1000_000];
-            // file.read_to_end(&mut buffer).expect("Failed to read file");
-            file.read(&mut buffer[..]).expect("Failed to read file");
+            let mut buffer = Vec::new();
+            // let mut buffer = [0; 1000_000];
+            file.read_to_end(&mut buffer).expect("Failed to read file");
+            // file.read(&mut buffer[..]).expect("Failed to read file");
 
-            let ecg: Vec<i16> = buffer[1024..]
+            let ecg: Vec<i16> = buffer[1024..9000000]
                 .chunks(2)
                 .map(|chunk| ((chunk[1] as i32) << 8 | (chunk[0] as i32)) as i16)
                 .collect();
@@ -110,9 +110,6 @@ mod ecg_data {
             while self.ind_r[0] < 55 {
                 self.ind_r.remove(0);
             }
-            // dbg!(ch.len());
-            // dbg!(self.ind_r[self.ind_r.len() - 1]);
-            // dbg!(ch.len() - self.ind_r[self.ind_r.len() - 1]);
             while (ch.len() - self.ind_r[self.ind_r.len() - 1]) < 55 {
                 self.ind_r.remove(self.ind_r.len() - 1);
             }
@@ -142,6 +139,53 @@ mod ecg_data {
 }
 
 mod proc_ecg {
+    fn cut_impuls1(ch: &Vec<f32>) -> Vec<f32> {
+        let mut out = ch.clone();
+        let mean_d = get_mean_diff(&ch);
+        for i in 5..ch.len() - 6 {
+            let d_out0 = (&out[i] - &out[i - 1]) / &mean_d;
+            let d_out1 = (&out[i + 1] - &out[i]) / &mean_d;
+            let d_out2 = (&out[i + 2] - &out[i + 1]) / &mean_d;
+            let sign0 = d_out0.signum();
+            let sign1 = d_out1.signum();
+            let sign2 = d_out2.signum();
+            let abs0 = d_out0.abs();
+            let abs1 = d_out1.abs();
+            let abs2 = d_out2.abs();
+            if (sign0 != sign1) && (sign1 != sign2) && (abs1 > 1.4)
+                && (((abs0 - abs1).abs() < abs1 * 0.88) || ((abs1 - abs2).abs() < abs1 * 0.88)) {
+                let win: Vec<&f32> = ch.iter().skip(i-5).take(11).collect();
+                let mut sort_win = win.to_owned();
+                sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                out[i - 2] = *sort_win[5];
+                out[i - 1] = *sort_win[5];
+                out[i] = *sort_win[5];
+                out[i + 1] = *sort_win[5];
+                out[i + 2] = *sort_win[5];
+                out[i + 3] = *sort_win[5];
+                if ((&out[i + 4] - &out[i + 3]) / &mean_d).abs() > 0.15 {
+                    out[i + 4] = *sort_win[5];
+                    out[i + 5] = *sort_win[5];
+                }
+            }
+            if (sign0 != sign1) && (abs0 > 1.0) && (abs1 > 1.0) && ((abs0 - abs1).abs() < (abs0 + abs1) * 0.5) {
+                let win: Vec<&f32> = ch.iter().skip(i-5).take(11).collect();
+                let mut sort_win = win.to_owned();
+                sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                out[i - 2] = *sort_win[5];
+                out[i - 1] = *sort_win[5];
+                out[i] = *sort_win[5];
+                out[i + 1] = *sort_win[5];
+                out[i + 2] = *sort_win[5];
+                if ((&out[i + 2] - &out[i + 1]) / &mean_d).abs() > 0.05 {
+                    out[i + 2] = *sort_win[5];
+                    out[i + 3] = *sort_win[5];
+                }
+            }
+        }
+        out
+    }
+
     fn cut_impuls(ch: &Vec<f32>) -> Vec<f32> {
         let mut out = ch.clone();
         let mut win = [0.0; 11];
@@ -151,9 +195,9 @@ mod proc_ecg {
         let sum: f32 = abs_diff.iter().sum();
         let mean_diff = sum / abs_diff.len() as f32;
         let trs: f32 = get_trs(&abs_diff);
-        // let mdch = get_mean_diff(&ch);
-        // dbg!(trs, mdch);
-        for i in (3..lench - 5).step_by(1) {
+        let mdch = get_mean_diff(&ch);
+        dbg!(trs, mdch);
+        for i in 3..lench - 5 {
             let j = i % 11;
             win[j] = ch[i];
             let d1 = ch[i - 1] - ch[i - 2];
@@ -175,7 +219,7 @@ mod proc_ecg {
             }
             // dbg!(d2.abs() + d3.abs());
             // dbg!(trs*0.5);
-            if (d1.signum() != d2.signum()) && (d2.signum() != d3.signum()) && ((d1.abs() + d2.abs() + d3.abs()) > trs / mean_diff  * 1.2) {  // 2.0
+            if (d1.signum() != d2.signum()) && (d2.signum() != d3.signum()) && ((d1.abs() + d2.abs() + d3.abs()) > trs / mean_diff * 1.2) {  // 2.0
                 let mut sort_win = win.to_vec();
                 sort_win.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 out[i - 2] = sort_win[5];
@@ -267,8 +311,9 @@ mod proc_ecg {
         // b, a = butter(2, 12, 'lp', fs=250)
         // let b = vec![0.0186504, 0.03730079, 0.0186504];
         // let a = vec![1.0, -1.57823618, 0.65283776];
-        let ch_del_ks = cut_impuls(&ch);
-        // let ch_del_ks = cut_impuls(&ch_del_ks);
+        let ch_del_ks = cut_impuls1(&ch);
+        let ch_del_ks = cut_impuls1(&ch_del_ks);
+        let ch_del_ks = cut_impuls1(&ch_del_ks);
         let mut fch = ch_del_ks.clone();
 
         let spec24 = get_spec24(&ch_del_ks);
@@ -316,10 +361,10 @@ mod proc_ecg {
         p2p
     }
 
-    fn sign(x: f32) -> f32 {
-        if x > 0.0 {
+    fn sign(x: &f32) -> f32 {
+        if *x > 0.0 {
             1.0
-        } else if x < 0.0 {
+        } else if *x < 0.0 {
             -1.0
         } else {
             0.0
@@ -327,7 +372,7 @@ mod proc_ecg {
     }
 
     fn vec_sign(ch: &Vec<f32>) -> Vec<f32> {
-        let out = ch.iter().map(|&val| sign(val)).collect();
+        let out = ch.iter().map(|&val| sign(&val)).collect();
         out
     }
 
@@ -336,9 +381,12 @@ mod proc_ecg {
         let mut ch_copy1 = ch.to_owned();
         ch_copy1.remove(0);
         ch_copy1.push(0.0);
-        let diff_ch: Vec<f32> = ch_copy.iter().zip(ch_copy1.iter()).map(|(val1, val2)| val1 - val2).collect();
+        let diff_ch: Vec<f32> = ch_copy.iter()
+            .zip(ch_copy1.iter())
+            .map(|(val1, val2)| val1 - val2).collect();
         diff_ch
     }
+
     pub fn get_mean_diff(ch: &Vec<f32>) -> f32 {
         let d_ch = my_diff(&ch);
         let abs_d_ch: Vec<f32> = d_ch.iter().map(|val| val.abs()).collect();
@@ -357,6 +405,7 @@ mod proc_ecg {
         let out = mean_d_ch + mean_d_ch1 + mean_d_ch2;
         out
     }
+
     pub fn get_trs(p2p: &Vec<f32>) -> f32 {
         let sum_p2p: f32 = p2p
             .iter()
@@ -582,9 +631,7 @@ mod qrs_forms {
                     let max_cor1 = max_vec(&coef_cor1);
                     let max_cor2 = max_vec(&coef_cor2);
                     let max_cor3 = max_vec(&coef_cor3);
-                    // let mean_cor = (max_cor1 + max_cor2 + max_cor3) / 3.0;
-                    // if mean_cor > 0.75 {
-                    // 0.93
+
                     if max_cor1 > 0.93 && max_cor2 > 0.93 && max_cor3 > 0.93 {
                         self.ref_form1 = qrs1.to_owned();
                         self.ref_form2 = qrs2.to_owned();
@@ -714,12 +761,8 @@ pub mod qrs_types {
         let fch3 = del_isoline(&fch3);
 
         let mut ind_rem_size = 0;
-        for k in 1..50 {
+        for k in 1..100 {
             let ind_rem = get_ind_zero(&mut ind_forms);
-            // dbg!(ind_rem_size, ind_rem.len());
-            // if ind_rem_size - ind_rem.len() < 10 {
-            //     break;
-            // }
             ind_rem_size = ind_rem.len();
             let rem_ind_r = get_rem_ind_r(&ind_r, &ind_rem);
             let _ = forms.get_ref_forms(&fch1, &fch2, &fch3, &rem_ind_r);
@@ -739,28 +782,12 @@ pub mod qrs_types {
                 let max_cor1 = max_vec(&coef_cor1);
                 let max_cor2 = max_vec(&coef_cor2);
                 let max_cor3 = max_vec(&coef_cor3);
-                let median_cor = median_cor(max_cor1, max_cor2, max_cor3);
-                let max_cor = max_cor(max_cor1, max_cor2, max_cor3);
-                // let mean_cor = (max_cor + median_cor) / 2.0;
-                // let mean_cor = (max_cor1 + max_cor2 + max_cor3 + max_cor) / 4.0;
-                // if k == 1 && ind_rem[i] < 4 {
-                    // if k == 1 && rem_ind_r[i] == 64910 {
-                    // dbg!(ind_rem[i], rem_ind_r[i], max_cor1, max_cor2, max_cor3, max_cor, median_cor);
-                // }
+
                 if max_cor1 > 0.955 || max_cor2 > 0.955 || max_cor3 > 0.955 {
                     ind_forms[ind_rem[i]] = k;
-                    // println!("1");
                 } else if max_cor1 > 0.84 && max_cor2 > 0.84 && max_cor3 > 0.84 {
                     ind_forms[ind_rem[i]] = k;
-                    // println!("2");
-                // } else if median_cor > 0.91 {
-                //     ind_forms[ind_rem[i]] = k;
-                    // println!("3");
-                    // } else if mean_cor > 0.88 {
-                    //     ind_forms[ind_rem[i]] = k;
-                    // println!("4");
                 }
-                // ind_forms[ind_rem[i]] = k;
             }
         }
         ind_forms
@@ -795,9 +822,9 @@ fn main() {
     // let stop = start.elapsed();
     // println!("Время выполнения: {} s", stop.as_secs());
 
-    ecg.lead1 = proc_ecg::clean_ch(&ecg.lead1);
-    ecg.lead2 = proc_ecg::clean_ch(&ecg.lead2);
-    ecg.lead3 = proc_ecg::clean_ch(&ecg.lead3);
+    // ecg.lead1 = proc_ecg::clean_ch(&ecg.lead1);
+    // ecg.lead2 = proc_ecg::clean_ch(&ecg.lead2);
+    // ecg.lead3 = proc_ecg::clean_ch(&ecg.lead3);
 
     let slice1: &[f32] = &ecg.lead1;
     let slice2: &[f32] = &ecg.lead2;
@@ -823,7 +850,7 @@ fn main() {
     let start = Instant::now();
     let type_forms = qrs_types::get_ind_types(&ecg.lead1, &ecg.lead2, &ecg.lead3, &ecg.ind_r);
     let stop = start.elapsed();
-    println!("Время выполнения: {} s", stop.as_secs());
+    println!("Время выполнения: {} ms", stop.as_millis());
     let mut types = vec![0.0; ecg.lead1.len()];
     for i in 0..type_forms.len() {
         types[ecg.ind_r[i]] = type_forms[i] as f32;
