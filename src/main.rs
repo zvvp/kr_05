@@ -41,11 +41,9 @@ mod ecg_data {
 
             let mut file = File::open(fname).expect("Failed to open file");
             let mut buffer = Vec::new();
-            // let mut buffer = [0; 1000_000];
             file.read_to_end(&mut buffer).expect("Failed to read file");
-            // file.read(&mut buffer[..]).expect("Failed to read file");
 
-            let ecg: Vec<i16> = buffer[1024..9000000]
+            let ecg: Vec<i16> = buffer[1024..9_000_000]
                 .chunks(2)
                 .map(|chunk| ((chunk[1] as i32) << 8 | (chunk[0] as i32)) as i16)
                 .collect();
@@ -109,12 +107,16 @@ mod ecg_data {
             }
             while self.ind_r[0] < 55 {
                 self.ind_r.remove(0);
+                self.intervals_r.remove(0);
+
             }
             while (ch.len() - self.ind_r[self.ind_r.len() - 1]) < 55 {
                 self.ind_r.remove(self.ind_r.len() - 1);
+                self.intervals_r.remove(self.ind_r.len() - 1);
             }
             if (ch.len() - self.ind_r[self.ind_r.len() - 1]) < 40 {
                 self.ind_r.remove(self.ind_r.len() - 1);
+                self.intervals_r.remove(self.ind_r.len() - 1);
             }
         }
         fn get_div_intervals(&mut self) {
@@ -761,9 +763,11 @@ pub mod qrs_types {
         let fch3 = del_isoline(&fch3);
 
         let mut ind_rem_size = 0;
-        for k in 1..100 {
+        for k in 1..10 {
             let ind_rem = get_ind_zero(&mut ind_forms);
             ind_rem_size = ind_rem.len();
+            println!("{}", ind_rem_size);
+            if ind_rem_size < 100 {break;}
             let rem_ind_r = get_rem_ind_r(&ind_r, &ind_rem);
             let _ = forms.get_ref_forms(&fch1, &fch2, &fch3, &rem_ind_r);
 
@@ -790,6 +794,7 @@ pub mod qrs_types {
                 }
             }
         }
+        // println!("{}", ind_forms.len());
         ind_forms
     }
 }
@@ -814,6 +819,12 @@ fn main() {
     let mut filef4 = File::create("fch4.bin").expect("Не удалось создать файл");
 
     ecg.read_ecg();
+    println!("{}", ecg.ind_r.len());
+    // println!("{}", ecg.intervals_r.len());
+    // println!("{}", ecg.div_intervals.len());
+    // println!("{:?}", &ecg.ind_r[..5]);
+    // println!("{:?}", &ecg.intervals_r[..5]);
+    // println!("{:?}", &ecg.div_intervals[..5]);
 
     // let start = Instant::now();
     // ecg.lead1 = proc_ecg::del_isoline(&ecg.lead1);
@@ -864,6 +875,10 @@ fn main() {
     // let slicef4: &[f32] = &sum_leads.0;
     // let slicef3: &[f32] = &p2p3;
     let slicef3: &[f32] = &types;
+    let slicef4: &[f32] = &ecg.div_intervals.iter()
+        .flat_map(|o| o.as_ref())
+        .cloned()
+        .collect::<Vec<f32>>();
     // let slicef3: &[usize] = &ecg.ind_r;
     // filef1
     //     .write_all(bytemuck::cast_slice(slicef1))
@@ -874,7 +889,7 @@ fn main() {
     filef3
         .write_all(bytemuck::cast_slice(slicef3))
         .expect("Не удалось записать в файл");
-    // filef4
-    //     .write_all(bytemuck::cast_slice(slicef4))
-    //     .expect("Не удалось записать в файл");
+    filef4
+        .write_all(bytemuck::cast_slice(slicef4))
+        .expect("Не удалось записать в файл");
 }
