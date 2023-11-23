@@ -823,7 +823,6 @@ fn main() {
     // println!("{}", ecg.intervals_r.len());
     // println!("{}", ecg.div_intervals.len());
     // println!("{:?}", &ecg.ind_r[..5]);
-    // println!("{:?}", &ecg.intervals_r[..5]);
     // println!("{:?}", &ecg.div_intervals[..5]);
 
     // let start = Instant::now();
