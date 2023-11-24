@@ -601,6 +601,7 @@ mod qrs_forms {
     // use crate::proc_ecg::del_isoline;
     use crate::qrs_types::max_vec;
 
+
     pub struct FormsQrs {
         pub ref_form1: Vec<f32>,
         pub ref_form2: Vec<f32>,
@@ -720,6 +721,7 @@ mod qrs_forms {
 pub mod qrs_types {
     use crate::proc_ecg::*;
     use crate::qrs_forms::*;
+    use crate::ecg_data::Ecg;
 
     fn get_ind_zero(ind_forms: &Vec<usize>) -> Vec<usize> {
         let mut out = vec![];
@@ -746,17 +748,18 @@ pub mod qrs_types {
         }
         max_v
     }
+    pub fn get_ind_types(ecg: &Ecg) -> Vec<usize> {
+        let mut ind_forms: Vec<usize> = vec![0; ecg.ind_r.len()];
 
-    pub fn get_ind_types(ch1: &Vec<f32>, ch2: &Vec<f32>, ch3: &Vec<f32>, ind_r: &Vec<usize>) -> Vec<usize> {
-        let mut ind_forms: Vec<usize> = vec![0; ind_r.len()];
         let mut forms = FormsQrs {
             ref_form1: vec![0.0; 51],
             ref_form2: vec![0.0; 51],
             ref_form3: vec![0.0; 51],
         };
-        let fch1 = clean_ch(&ch1);
-        let fch2 = clean_ch(&ch2);
-        let fch3 = clean_ch(&ch3);
+
+        let fch1 = clean_ch(&ecg.lead1);
+        let fch2 = clean_ch(&ecg.lead2);
+        let fch3 = clean_ch(&ecg.lead3);
 
         let fch1 = del_isoline(&fch1);
         let fch2 = del_isoline(&fch2);
@@ -768,7 +771,7 @@ pub mod qrs_types {
             ind_rem_size = ind_rem.len();
             println!("{}", ind_rem_size);
             if ind_rem_size < 100 {break;}
-            let rem_ind_r = get_rem_ind_r(&ind_r, &ind_rem);
+            let rem_ind_r = get_rem_ind_r(&ecg.ind_r, &ind_rem);
             let _ = forms.get_ref_forms(&fch1, &fch2, &fch3, &rem_ind_r);
 
             for i in 0..ind_rem.len() {
@@ -776,11 +779,11 @@ pub mod qrs_types {
                 let mut coef_cor2 = vec![0.0; 41];
                 let mut coef_cor3 = vec![0.0; 41];
                 for j in 0..41 {
-                    let qrs1 = &fch1[ind_r[ind_rem[i]] - 25 + j - 20..ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
+                    let qrs1 = &fch1[ecg.ind_r[ind_rem[i]] - 25 + j - 20..ecg.ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
                     coef_cor1[j] = get_coef_cor(&qrs1, &forms.ref_form1);
-                    let qrs2 = &fch2[ind_r[ind_rem[i]] - 25 + j - 20..ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
+                    let qrs2 = &fch2[ecg.ind_r[ind_rem[i]] - 25 + j - 20..ecg.ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
                     coef_cor2[j] = get_coef_cor(&qrs2, &forms.ref_form2);
-                    let qrs3 = &fch3[ind_r[ind_rem[i]] - 25 + j - 20..ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
+                    let qrs3 = &fch3[ecg.ind_r[ind_rem[i]] - 25 + j - 20..ecg.ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
                     coef_cor3[j] = get_coef_cor(&qrs3, &forms.ref_form3);
                 }
                 let max_cor1 = max_vec(&coef_cor1);
@@ -794,7 +797,6 @@ pub mod qrs_types {
                 }
             }
         }
-        // println!("{}", ind_forms.len());
         ind_forms
     }
 }
@@ -858,7 +860,7 @@ fn main() {
     // let p2p3 = filt_r(&p2p3);
     // let del_art = del_artifacts(&ecg.lead3, &p2p3);
     let start = Instant::now();
-    let type_forms = qrs_types::get_ind_types(&ecg.lead1, &ecg.lead2, &ecg.lead3, &ecg.ind_r);
+    let type_forms = qrs_types::get_ind_types(&ecg);
     let stop = start.elapsed();
     println!("Время выполнения: {} ms", stop.as_millis());
     let mut types = vec![0.0; ecg.lead1.len()];
