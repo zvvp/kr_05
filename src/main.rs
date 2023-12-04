@@ -27,7 +27,6 @@ mod ecg_data {
         pub lead1: Vec<f32>,
         pub lead2: Vec<f32>,
         pub lead3: Vec<f32>,
-        pub len_lead: usize,
         pub ind_r: Vec<usize>,
         pub intervals_r: Vec<usize>,
         pub div_intervals: Vec<Option<f32>>,
@@ -79,16 +78,16 @@ mod ecg_data {
             self.lead1 = ch_1;
             self.lead2 = ch_2;
             self.lead3 = ch_3;
-            self.len_lead = self.lead1.len();
+            // self.len_lead = self.lead1.len();
             let sum_leads = pre_proc_r(&self.lead1, &self.lead2, &self.lead3);
             self.get_ind_r(&sum_leads.0);
             self.get_div_intervals();
         }
-        fn get_ind_r(&mut self, ch: &Vec<f32>) {
+        fn get_ind_r(&mut self, sum_ch: &Vec<f32>) {
             let mut max_val: f32 = 0.0;
             let mut ind_max = 0;
             let mut interval = 0;
-            for (ind, val) in ch.iter().enumerate() {
+            for (ind, val) in sum_ch.iter().enumerate() {
                 if *val > max_val {
                     max_val = *val;
                     ind_max = ind;
@@ -110,11 +109,11 @@ mod ecg_data {
                 self.intervals_r.remove(0);
 
             }
-            while (ch.len() - self.ind_r[self.ind_r.len() - 1]) < 55 {
+            while (sum_ch.len() - self.ind_r[self.ind_r.len() - 1]) < 55 {
                 self.ind_r.remove(self.ind_r.len() - 1);
                 self.intervals_r.remove(self.ind_r.len() - 1);
             }
-            if (ch.len() - self.ind_r[self.ind_r.len() - 1]) < 40 {
+            if (sum_ch.len() - self.ind_r[self.ind_r.len() - 1]) < 40 {
                 self.ind_r.remove(self.ind_r.len() - 1);
                 self.intervals_r.remove(self.ind_r.len() - 1);
             }
@@ -613,9 +612,9 @@ mod qrs_forms {
             if ind_r.len() > 1 {
                 for i in 0..(ind_r.len() - 1) {
                     let start_index = (ind_r[i] - 25) as usize;
-                    let end_index = (ind_r[i] + 26) as usize;
+                    let end_index = (ind_r[i] + 46) as usize;
                     let start_index1 = (ind_r[i + 1] - 25) as usize;
-                    let end_index1 = (ind_r[i + 1] + 26) as usize;
+                    let end_index1 = (ind_r[i + 1] + 46) as usize;
                     let qrs1 = &ch1[start_index..end_index].to_vec();
                     let qrs2 = &ch2[start_index..end_index].to_vec();
                     let qrs3 = &ch3[start_index..end_index].to_vec();
@@ -752,9 +751,9 @@ pub mod qrs_types {
         let mut ind_forms: Vec<usize> = vec![0; ecg.ind_r.len()];
 
         let mut forms = FormsQrs {
-            ref_form1: vec![0.0; 51],
-            ref_form2: vec![0.0; 51],
-            ref_form3: vec![0.0; 51],
+            ref_form1: vec![0.0; 71],
+            ref_form2: vec![0.0; 71],
+            ref_form3: vec![0.0; 71],
         };
 
         let fch1 = clean_ch(&ecg.lead1);
@@ -765,12 +764,15 @@ pub mod qrs_types {
         let fch2 = del_isoline(&fch2);
         let fch3 = del_isoline(&fch3);
 
+        let mut ind_rem_size0 = 0;
         let mut ind_rem_size = 0;
         for k in 1..10 {
             let ind_rem = get_ind_zero(&mut ind_forms);
             ind_rem_size = ind_rem.len();
             println!("{}", ind_rem_size);
             if ind_rem_size < 100 {break;}
+            if ind_rem_size0 == ind_rem_size {break;}
+            ind_rem_size0 = ind_rem_size;
             let rem_ind_r = get_rem_ind_r(&ecg.ind_r, &ind_rem);
             let _ = forms.get_ref_forms(&fch1, &fch2, &fch3, &rem_ind_r);
 
@@ -779,11 +781,11 @@ pub mod qrs_types {
                 let mut coef_cor2 = vec![0.0; 41];
                 let mut coef_cor3 = vec![0.0; 41];
                 for j in 0..41 {
-                    let qrs1 = &fch1[ecg.ind_r[ind_rem[i]] - 25 + j - 20..ecg.ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
+                    let qrs1 = &fch1[ecg.ind_r[ind_rem[i]] - 25 + j - 20..ecg.ind_r[ind_rem[i]] + 46 + j - 20].to_vec();
                     coef_cor1[j] = get_coef_cor(&qrs1, &forms.ref_form1);
-                    let qrs2 = &fch2[ecg.ind_r[ind_rem[i]] - 25 + j - 20..ecg.ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
+                    let qrs2 = &fch2[ecg.ind_r[ind_rem[i]] - 25 + j - 20..ecg.ind_r[ind_rem[i]] + 46 + j - 20].to_vec();
                     coef_cor2[j] = get_coef_cor(&qrs2, &forms.ref_form2);
-                    let qrs3 = &fch3[ecg.ind_r[ind_rem[i]] - 25 + j - 20..ecg.ind_r[ind_rem[i]] + 26 + j - 20].to_vec();
+                    let qrs3 = &fch3[ecg.ind_r[ind_rem[i]] - 25 + j - 20..ecg.ind_r[ind_rem[i]] + 46 + j - 20].to_vec();
                     coef_cor3[j] = get_coef_cor(&qrs3, &forms.ref_form3);
                 }
                 let max_cor1 = max_vec(&coef_cor1);
@@ -806,7 +808,6 @@ fn main() {
         lead1: vec![],
         lead2: vec![],
         lead3: vec![],
-        len_lead: 0,
         ind_r: vec![],
         intervals_r: vec![],
         div_intervals: vec![],
@@ -821,7 +822,7 @@ fn main() {
     let mut filef4 = File::create("fch4.bin").expect("Не удалось создать файл");
 
     ecg.read_ecg();
-    println!("{}", ecg.ind_r.len());
+    // println!("{}", ecg.ind_r.len());
     // println!("{}", ecg.intervals_r.len());
     // println!("{}", ecg.div_intervals.len());
     // println!("{:?}", &ecg.ind_r[..5]);
